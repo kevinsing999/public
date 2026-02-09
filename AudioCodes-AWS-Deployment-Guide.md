@@ -3108,7 +3108,9 @@ This appendix provides visual representations of all network flows in the AudioC
 │    │  52.122.0.0/15       │                           │                      │          │
 │    └──────────┬───────────┘                           └──────────┬───────────┘          │
 │               │ TLS 5061 (Signaling)                             │ HTTPS 443            │
-│               │ UDP 3478-3481, 49152-53247 (Media)               │                      │
+│               │ UDP 3478-3481, 49152-53247 (Media)               ↕ (Bidirectional)      │
+│               │                                        OVOC → MS: API queries           │
+│               │                                        MS → OVOC: Webhook notifications │
 └───────────────┼──────────────────────────────────────────────────┼──────────────────────┘
                 │                                                  │
     ════════════╪══════════════════════════════════════════════════╪═══════════════════════
@@ -3147,8 +3149,8 @@ This appendix provides visual representations of all network flows in the AudioC
 │ MANAGER      │ │ CONFIGURATOR │ │ ROUTER       │ │                      │
 │              │ │              │ │              │ │ • Device Management  │
 │ • HA Failover│ │ • Routing    │ │ • Real-time  │ │ • QoE Monitoring     │
-│ • Route Table│ │   Policy     │ │   Routing    │ │ • Teams Integration ─┼───►
-│   Updates    │ │ • Config     │ │   Decisions  │ │                      │
+│ • Route Table│ │   Policy     │ │   Routing    │ │ • Teams Integration ◄┼───►
+│   Updates    │ │ • Config     │ │   Decisions  │ │   (Graph API ↔)      │
 └──────────────┘ └──────────────┘ └──────────────┘ └──────────────────────┘
                         │               │
                         └───────┬───────┘
@@ -3340,12 +3342,23 @@ This appendix provides visual representations of all network flows in the AudioC
     └─────────────────┘                                       └────────┬────────┘
                                                                        │
                                                                        │
-                                   MICROSOFT CLOUD                     │
+                                   MICROSOFT 365 / GRAPH API            │
     ┌─────────────────┐                                                │
-    │ Microsoft 365   │◄──────── Azure AD Auth (TCP 443) ─────────────┤
-    │ Graph API       │◄──────── Graph API (TCP 443) ─────────────────┤
-    │                 │──────────Call Notifications (TCP 443)─────────►│
+    │ Microsoft 365   │                                                │
+    │                 │                                                │
+    │ login.microsoft │◄──────── Azure AD Auth (TCP 443) ─────────────┤ OVOC initiates
+    │ online.com      │          (OVOC → Microsoft)                    │
+    │                 │                                                │
+    │ graph.microsoft │◄──────── Graph API Query (TCP 443) ───────────┤ OVOC initiates
+    │ .com            │          (OVOC → Microsoft)                    │
+    │                 │          Query call records, user info         │
+    │                 │                                                │
+    │ webhook.        │────────► Webhook Notifications (TCP 443) ─────►│ Microsoft initiates
+    │ microsoft.com   │          (Microsoft → OVOC)                    │ (INBOUND to OVOC)
+    │                 │          New call record available             │
     └─────────────────┘                                       └────────┴────────┘
+
+    ** IMPORTANT: OVOC must be reachable from Microsoft 365 IPs on TCP 443 for webhooks **
 
 
     ┌─────────────────┐           ARM MANAGEMENT              ┌─────────────────┐
@@ -3480,7 +3493,10 @@ This appendix provides visual representations of all network flows in the AudioC
 | QoE Reports | SBC | OVOC | TCP | 5001 | TLS |
 | Device Mgmt | OVOC/ARM | SBC | TCP | 443 | HTTPS |
 | SSH | Admin | All Components | TCP | 22 | SSH |
-| Graph API | OVOC | Microsoft | TCP | 443 | HTTPS |
+| Graph API (queries) | OVOC | Microsoft | TCP | 443 | HTTPS |
+| Graph API (webhooks) | Microsoft | OVOC | TCP | 443 | HTTPS |
+
+> **Note:** Graph API traffic is bidirectional. OVOC initiates outbound queries to graph.microsoft.com, while Microsoft sends inbound webhook notifications to OVOC when new call records are available. OVOC must be reachable from Microsoft 365 IPs.
 
 ---
 
@@ -3505,6 +3521,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | 1.1 | February 2026 | KS | Clarified Stack Manager role (deployment only, not active failover); Added SBC IAM requirements for HA failover; Added Cyber Security Variation section; Updated failover mechanism documentation; Stack Manager retained for Day 2 operations |
 | 1.2 | February 2026 | KS | Added Section 10.4 SBC Management Authentication documenting split identity model: Proxy SBC uses Microsoft Entra ID (OAuth 2.0), Downstream SBCs use on-premises Active Directory (LDAPS); Added SBC Management app registration to Section 6; Added cross-references from Section 10.1 |
 | 1.3 | February 2026 | KS | Added Section 19.1 SIP Trunk Connectivity in HA documenting how PSTN/ISP SIP trunks connect to the HA Proxy SBC pair via Virtual IP; explained failover behavior for external parties; added HA connectivity architecture diagram showing internal vs external entity connections |
+| 1.4 | February 2026 | KS | Updated Appendix D diagrams to clarify bidirectional Graph API traffic: OVOC initiates outbound queries to Microsoft, Microsoft sends inbound webhook notifications to OVOC for call records; added note in quick reference table |
 
 ---
 
