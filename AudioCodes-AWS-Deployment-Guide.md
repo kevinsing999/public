@@ -2589,6 +2589,130 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
 3. **Both IP types "float"** - they move to the Active SBC automatically on failover
 4. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
 
+### Voice Recording Considerations
+
+When deploying SBCs with Microsoft Teams Direct Routing, organisations using existing voice recording solutions must consider the impact of media encryption on their recording infrastructure.
+
+#### The Challenge
+
+**Typical Voice Recorder Setup:**
+- Uses **port mirroring** (SPAN) to capture IP-based RTP traffic
+- Uses **analog taps** for traditional analog phones
+- Passively captures traffic - needs to "see" unencrypted media
+
+**The Problem:**
+- Teams requires **SRTP** (encrypted media) between Teams and the Proxy SBC
+- If internal legs are also encrypted, port mirroring captures encrypted data that cannot be decoded
+- Port mirroring cannot decrypt SRTP without the session keys
+
+**The Good News:**
+- Many modern voice recorders support **SIPREC** (e.g., Eventide NexLog DX-Series, Verint, NICE, Red Box, ASC)
+- SIPREC allows the SBC to send a decrypted media copy directly to the recorder
+- Full SRTP encryption can be maintained on the network while still recording calls
+
+#### Media Encryption by Segment
+
+| Segment | Encryption | Configurable? | Notes |
+|---------|------------|---------------|-------|
+| Teams ↔ Proxy SBC | SRTP (mandatory) | No | Microsoft requirement |
+| Proxy SBC ↔ Downstream SBC | RTP or SRTP | Yes | IP Profile setting |
+| Downstream SBC ↔ IP Phones | RTP or SRTP | Yes | IP Profile setting |
+| Proxy SBC ↔ PSTN Provider | Usually RTP | Depends on carrier | Most carriers don't support SRTP |
+
+#### Option 1: Keep Internal Media as RTP (Unencrypted)
+
+```
+Teams ◄──SRTP──► Proxy SBC ◄──RTP──► Downstream SBC ◄──RTP──► IP Phones
+                     │                      │
+              (Port Mirror)          (Port Mirror)
+                     ▼                      ▼
+               ┌─────────────────────────────────┐
+               │    EXISTING VOICE RECORDER      │
+               │    Can capture and decode RTP   │
+               └─────────────────────────────────┘
+```
+
+| Pros | Cons |
+|------|------|
+| Existing recorder works as-is with port mirroring | No encryption on internal network |
+| Simplest option | Security team will likely object |
+| No additional cost or config changes | Assumes internal network is "trusted" |
+
+**When this works:** If the internal network is segmented, firewalled, and considered a trusted zone.
+
+#### Option 2: SBC-Based Recording via SIPREC (Recommended)
+
+If the existing voice recorder supports SIPREC (such as Eventide NexLog 740/840, Verint, NICE, Red Box, ASC), this is the recommended approach.
+
+```
+Teams ◄──SRTP──► Proxy SBC ◄──SRTP──► Downstream SBC ◄──SRTP──► IP Phones
+                     │                      │
+              (SIPREC - SBC sends          (SIPREC)
+               decrypted copy)
+                     ▼                      ▼
+               ┌─────────────────────────────────┐
+               │    EXISTING VOICE RECORDER      │
+               │  Receives decrypted media from  │
+               │  SBC via SIPREC                 │
+               └─────────────────────────────────┘
+```
+
+| Pros | Cons |
+|------|------|
+| End-to-end SRTP maintained on network | SIPREC licensing may be required on recorder |
+| SBC handles decryption and sends to recorder | Additional SBC configuration |
+| Industry standard approach | Older recorder models may not support SIPREC |
+| Selective recording possible | May need to confirm channel capacity |
+
+**Prerequisites:**
+1. Confirm existing voice recorder supports SIPREC
+2. Confirm SIPREC is licensed/enabled on recorder
+3. Confirm sufficient SIPREC channel capacity
+4. Configure AudioCodes SBC as SIPREC client (SRC)
+
+#### Option 3: Selective Encryption Based on Recording Needs
+
+Use SBC Classification Rules to identify phones needing recording (by IP, User-Agent, number range) and apply RTP profile to those only, while other phones use SRTP.
+
+| Pros | Cons |
+|------|------|
+| Balance security and compliance | Complex to manage |
+| Only expose what needs recording | Classification rules needed on SBC |
+| Security team gets encryption for most calls | Inconsistent security posture |
+
+#### Option 4: Replace Existing Voice Recorder
+
+If the current voice recorder doesn't support SIPREC, consider replacement with a SIPREC-capable recorder such as Eventide NexLog DX-Series, Verint, NICE, Red Box, or ASC.
+
+#### Option 5: Microsoft Teams Native Recording + Existing Recorder for Legacy
+
+Use Microsoft Compliance Recording (Purview or third-party policy-based) for Teams calls, while the existing recorder continues to capture PSTN/legacy calls via port mirroring.
+
+| Pros | Cons |
+|------|------|
+| Uses native Teams compliance | Two recording systems to manage |
+| Existing recorder continues for PSTN/legacy | Data in two places |
+| No changes to existing recorder | Teams recording has data sovereignty considerations |
+
+#### Voice Recording Decision Matrix
+
+| Option | Encryption | Existing Recorder Works? | Cost | Complexity | Security Approved? |
+|--------|------------|--------------------------|------|------------|---------------------|
+| 1. RTP internally | Partial | Yes (port mirror) | None | Low | Unlikely |
+| **2. SIPREC** | **Full SRTP** | **Yes (if SIPREC-capable)** | **Low-Medium** | **Medium** | **Yes** |
+| 3. Selective | Mixed | For selected phones | Low | High | Partially |
+| 4. Replace recorder | Full SRTP | N/A (new recorder) | High | High | Yes |
+| 5. Teams native + existing | Full SRTP | For non-Teams only | Low | Medium | Yes |
+
+#### Recommendation
+
+**If the existing voice recorder supports SIPREC:** Option 2 (SIPREC) is recommended - full SRTP encryption on the network while the recorder receives decrypted media via SIPREC from the SBC.
+
+**If the existing voice recorder does not support SIPREC:**
+- Option 1 (RTP internally) if security accepts the risk
+- Option 5 (Teams native + existing recorder for PSTN) as a hybrid approach
+- Option 4 (Replace/upgrade recorder) for long-term compliance
+
 ---
 
 ## 20. IAM Permissions and Security
@@ -3522,6 +3646,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | 1.2 | February 2026 | KS | Added Section 10.4 SBC Management Authentication documenting split identity model: Proxy SBC uses Microsoft Entra ID (OAuth 2.0), Downstream SBCs use on-premises Active Directory (LDAPS); Added SBC Management app registration to Section 6; Added cross-references from Section 10.1 |
 | 1.3 | February 2026 | KS | Added Section 19.1 SIP Trunk Connectivity in HA documenting how PSTN/ISP SIP trunks connect to the HA Proxy SBC pair via Virtual IP; explained failover behavior for external parties; added HA connectivity architecture diagram showing internal vs external entity connections |
 | 1.4 | February 2026 | KS | Updated Appendix D diagrams to clarify bidirectional Graph API traffic: OVOC initiates outbound queries to Microsoft, Microsoft sends inbound webhook notifications to OVOC for call records; added note in quick reference table |
+| 1.5 | February 2026 | KS | Added Voice Recording Considerations subsection to Section 19 documenting SRTP encryption impact on existing voice recorders; covered SIPREC integration option, selective encryption, and decision matrix for recording solutions |
 
 ---
 
