@@ -2378,6 +2378,217 @@ Phase 8: Validation
 | Router Failure Handling | Traffic redistributed to remaining routers |
 | Database | Embedded in Configurator |
 
+### SIP Trunk Connectivity in HA
+
+This section explains how ISP/PSTN providers connect to the HA SBC pair and what happens during failover from their perspective.
+
+#### Concept Overview
+
+When configuring SIP trunks with external providers (ISPs, PSTN carriers, or other SBCs), the provider connects to a **single Virtual IP (VIP)** address. The provider is completely unaware of the HA pair behind this address:
+
+- The ISP/PSTN provider configures their SBC to send SIP traffic to **one IP address only**
+- This IP address is the Virtual IP that "floats" between the Active and Standby SBCs
+- The provider does not need to know about individual SBC instance IPs
+- Failover is transparent to the provider - they never need to reconfigure anything
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        ISP/PSTN Provider Perspective                         │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                              │
+│   ┌──────────────┐         Single IP          ┌─────────────────────────┐   │
+│   │              │         (VIP/EIP)          │                         │   │
+│   │   ISP SBC    │ ─────────────────────────► │   Your HA SBC Pair      │   │
+│   │              │                            │                         │   │
+│   └──────────────┘                            └─────────────────────────┘   │
+│                                                                              │
+│   ISP configures:                             Behind the VIP:               │
+│   • One destination IP                        • SBC #1 (Active)             │
+│   • One destination port (5060/5061)          • SBC #2 (Standby)            │
+│   • One FQDN (optional)                       • Route table magic           │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+                              How the VIP Works
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│                         ┌─────────────────┐                                 │
+│                         │   Virtual IP    │                                 │
+│                         │  169.254.64.x   │                                 │
+│                         └────────┬────────┘                                 │
+│                                  │                                          │
+│                    ┌─────────────┴─────────────┐                            │
+│                    │      VPC Route Table      │                            │
+│                    │  (Updated on Failover)    │                            │
+│                    └─────────────┬─────────────┘                            │
+│                                  │                                          │
+│              ┌───────────────────┼───────────────────┐                      │
+│              │                   │                   │                      │
+│              ▼                   │                   ▼                      │
+│   ┌─────────────────┐            │        ┌─────────────────┐               │
+│   │    SBC #1       │            │        │    SBC #2       │               │
+│   │   (ACTIVE)      │◄───────────┘        │   (STANDBY)     │               │
+│   │                 │   Route points      │                 │               │
+│   │   AZ-1          │   to Active SBC     │   AZ-2          │               │
+│   └─────────────────┘                     └─────────────────┘               │
+│                                                                              │
+│   On failover: Route table updated to point VIP to SBC #2's ENI             │
+│                                                                              │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### Traffic Types and Failover Mechanisms
+
+| Traffic Type | Source | Destination IP Type | Failover Mechanism | Provider Action Required |
+|--------------|--------|---------------------|-------------------|-------------------------|
+| **Internal (PSTN via Direct Connect)** | On-premises/DC equipment via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI | None - transparent |
+| **External (Teams from Internet)** | Microsoft Teams infrastructure from public internet | Elastic IP (public) on External interface | Elastic IP reassigned from failed SBC to Standby SBC | None - transparent |
+
+**Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The ISP/PSTN provider experiences a brief interruption but does not need to take any action.
+
+#### What to Provide to Your ISP/PSTN Provider
+
+When onboarding a new SIP trunk with an ISP or PSTN provider, provide them with the following information:
+
+| Information | Value | Notes |
+|-------------|-------|-------|
+| **Destination IP Address** | Virtual IP on Internal interface (e.g., 169.254.64.10) | Single IP - do NOT provide individual SBC IPs |
+| **Destination Port** | 5060 (UDP/TCP) or 5061 (TLS) | Based on your security requirements |
+| **FQDN (Optional)** | e.g., sbc.example.com | Must resolve to the VIP; useful for TLS certificate validation |
+| **Transport Protocol** | UDP, TCP, or TLS | TLS recommended for security |
+| **Codec Support** | G.711, G.729, etc. | As per your configuration |
+
+**Important:** Always provide the **Virtual IP**, not the individual SBC instance IPs. The provider should configure their equipment to send all traffic to this single destination.
+
+#### Failover Behavior and Call Impact
+
+Understanding what happens during failover helps set expectations with your ISP/PSTN provider:
+
+| Scenario | Behavior |
+|----------|----------|
+| **Active calls in progress (PSTN)** | Calls are **dropped** - SIP is not call-stateful across failover. Callers must redial. |
+| **Active calls in progress (Teams IP)** | Calls may be **maintained** if using IP-based routing (Teams handles re-INVITE) |
+| **New calls during failover** | Brief interruption (seconds) while route table updates; new calls then succeed |
+| **New calls after failover** | Route seamlessly to the new Active SBC - no difference from caller perspective |
+| **ISP/PSTN provider reconfiguration** | **Not required** - the VIP remains the same, only the underlying SBC changes |
+
+**Key Point:** Communicate to your ISP/PSTN provider that during rare failover events, there may be a brief interruption lasting a few seconds. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - new calls will automatically route to the new Active SBC.
+
+#### HA Connectivity Architecture Diagram
+
+The following diagram shows how different entities connect to the HA Proxy SBC pair, distinguishing between external (internet-facing) and internal (private network) connectivity:
+
+```
+                                    EXTERNAL CONNECTIVITY
+                                    (Via Elastic IP - Public)
+
+    ┌─────────────────────────────────────────────────────────────────────────────────┐
+    │                              INTERNET                                            │
+    │                                                                                  │
+    │   ┌───────────────────┐                           ┌───────────────────┐         │
+    │   │   Microsoft       │                           │   PSTN Provider   │         │
+    │   │   Teams           │                           │   (Internet SIP)  │         │
+    │   │   52.112.0.0/14   │                           │                   │         │
+    │   └─────────┬─────────┘                           └─────────┬─────────┘         │
+    │             │                                               │                    │
+    │             │         ┌─────────────────────┐               │                    │
+    │             └────────►│   ELASTIC IP        │◄──────────────┘                    │
+    │                       │   (Public IP)       │                                    │
+    │                       │   e.g., 54.x.x.x    │                                    │
+    │                       └──────────┬──────────┘                                    │
+    │                                  │ Moves on failover                             │
+    └──────────────────────────────────┼───────────────────────────────────────────────┘
+                                       │
+    ═══════════════════════════════════╪═══════════════════════════════════════════════
+                                       │
+    ┌──────────────────────────────────┼───────────────────────────────────────────────┐
+    │                           AWS VPC│                                               │
+    │                                  ▼                                               │
+    │                       ┌─────────────────────┐                                    │
+    │                       │  EXTERNAL INTERFACE │                                    │
+    │                       │  (WAN)              │                                    │
+    │                       └──────────┬──────────┘                                    │
+    │                                  │                                               │
+    │   ┌──────────────────────────────┴──────────────────────────────────────┐        │
+    │   │                         HA PROXY SBC PAIR                            │        │
+    │   │                                                                      │        │
+    │   │   ┌─────────────────────┐    HA Link    ┌─────────────────────┐     │        │
+    │   │   │     SBC #1          │◄─────────────►│     SBC #2          │     │        │
+    │   │   │     (ACTIVE)        │   Heartbeat   │     (STANDBY)       │     │        │
+    │   │   │                     │               │                     │     │        │
+    │   │   │   Availability      │               │   Availability      │     │        │
+    │   │   │   Zone A            │               │   Zone B            │     │        │
+    │   │   │                     │               │                     │     │        │
+    │   │   │   Handles all       │               │   Ready to take     │     │        │
+    │   │   │   traffic           │               │   over on failure   │     │        │
+    │   │   └─────────────────────┘               └─────────────────────┘     │        │
+    │   │              ▲                                     ▲                │        │
+    │   │              │         VPC Route Table             │                │        │
+    │   │              │        points VIP here ────────────►│ (after        │        │
+    │   │              │         (normal ops)                │  failover)    │        │
+    │   │              │                                     │                │        │
+    │   └──────────────┴─────────────────────────────────────┴────────────────┘        │
+    │                                  │                                               │
+    │                       ┌──────────┴──────────┐                                    │
+    │                       │  INTERNAL INTERFACE │                                    │
+    │                       │  (LAN)              │                                    │
+    │                       └──────────┬──────────┘                                    │
+    │                                  │                                               │
+    │                       ┌──────────┴──────────┐                                    │
+    │                       │   VIRTUAL IP        │                                    │
+    │                       │   169.254.64.x      │                                    │
+    │                       │   (Floats between   │                                    │
+    │                       │    SBC #1 & #2)     │                                    │
+    │                       └──────────┬──────────┘                                    │
+    │                                  │                                               │
+    └──────────────────────────────────┼───────────────────────────────────────────────┘
+                                       │
+    ═══════════════════════════════════╪═══════════════════════════════════════════════
+                              Direct Connect / VPN
+                                       │
+    ┌──────────────────────────────────┼───────────────────────────────────────────────┐
+    │                        ON-PREMISES│NETWORK                                       │
+    │                                  │                                               │
+    │             ┌────────────────────┼────────────────────┐                          │
+    │             │                    │                    │                          │
+    │             ▼                    ▼                    ▼                          │
+    │   ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐              │
+    │   │   Downstream      │ │   PSTN Provider   │ │   Cisco Webex     │              │
+    │   │   SBCs            │ │   (Direct Connect)│ │   DI / PBX        │              │
+    │   │                   │ │                   │ │                   │              │
+    │   │   Sites with      │ │   Carrier SBC     │ │   On-prem         │              │
+    │   │   local endpoints │ │   via MPLS/DC     │ │   integrations    │              │
+    │   └───────────────────┘ └───────────────────┘ └───────────────────┘              │
+    │                                                                                  │
+    │   All internal entities connect to the SAME Virtual IP (169.254.64.x)           │
+    │   They are unaware of which physical SBC is currently Active                     │
+    │                                                                                  │
+    └──────────────────────────────────────────────────────────────────────────────────┘
+
+                                    INTERNAL CONNECTIVITY
+                                    (Via Virtual IP - Private)
+```
+
+#### Connectivity Summary by Entity Type
+
+| Entity | Location | Connects To | IP Type | Interface | Failover Impact |
+|--------|----------|-------------|---------|-----------|-----------------|
+| Microsoft Teams | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
+| PSTN Provider (Internet) | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
+| PSTN Provider (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| Downstream SBCs | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| Cisco Webex DI | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| 3rd Party PBX | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| Registered Endpoints | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+
+**Key Design Points:**
+
+1. **External entities** (Teams, internet-based PSTN) connect via the **Elastic IP** on the WAN interface
+2. **Internal entities** (downstream SBCs, DC-connected PSTN, PBX) connect via the **Virtual IP** on the LAN interface
+3. **Both IP types "float"** - they move to the Active SBC automatically on failover
+4. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
+
 ---
 
 ## 20. IAM Permissions and Security
@@ -3293,7 +3504,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | 1.0 | February 2026 | KS | Initial release - Unified deployment guide consolidating AWS deployment and SBC configuration documentation |
 | 1.1 | February 2026 | KS | Clarified Stack Manager role (deployment only, not active failover); Added SBC IAM requirements for HA failover; Added Cyber Security Variation section; Updated failover mechanism documentation; Stack Manager retained for Day 2 operations |
 | 1.2 | February 2026 | KS | Added Section 10.4 SBC Management Authentication documenting split identity model: Proxy SBC uses Microsoft Entra ID (OAuth 2.0), Downstream SBCs use on-premises Active Directory (LDAPS); Added SBC Management app registration to Section 6; Added cross-references from Section 10.1 |
-| 1.3 | February 2026 | KS | Added Section 19.1 SIP Trunk Connectivity in HA documenting how PSTN/ISP SIP trunks connect to the HA Proxy SBC pair via Virtual IP; explained failover behavior for external parties |
+| 1.3 | February 2026 | KS | Added Section 19.1 SIP Trunk Connectivity in HA documenting how PSTN/ISP SIP trunks connect to the HA Proxy SBC pair via Virtual IP; explained failover behavior for external parties; added HA connectivity architecture diagram showing internal vs external entity connections |
 
 ---
 
