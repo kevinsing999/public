@@ -2,7 +2,7 @@
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 1.0
+**Document Version:** 1.1
 **Date:** February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -31,8 +31,9 @@
 18. [Deployment Methodology](#18-deployment-methodology)
 19. [High Availability Considerations](#19-high-availability-considerations)
 20. [IAM Permissions and Security](#20-iam-permissions-and-security)
-21. [Licensing Considerations](#21-licensing-considerations)
-22. [References and Documentation](#22-references-and-documentation)
+21. [Cyber Security Variation: Stack Manager Component](#21-cyber-security-variation-stack-manager-component)
+22. [Licensing Considerations](#22-licensing-considerations)
+23. [References and Documentation](#23-references-and-documentation)
 - [Appendix A: Deployment Checklist](#appendix-a-deployment-checklist)
 - [Appendix B: Credentials Reference Template](#appendix-b-credentials-reference-template)
 - [Appendix C: Quick Reference Tables](#appendix-c-quick-reference-tables)
@@ -51,13 +52,17 @@ This document provides deployment guidance for the AudioCodes voice infrastructu
 
 ### Key Takeaways
 
-1. **Stack Manager is Mandatory:** The AudioCodes Stack Manager is a **mandatory component** for deploying Mediant VE SBCs in High Availability across multiple Availability Zones. It manipulates VPC route tables to facilitate failover.
+1. **Stack Manager for Deployment:** The AudioCodes Stack Manager is a **mandatory component for initial deployment** of Mediant VE SBCs in High Availability across multiple Availability Zones. It deploys the HA stack via CloudFormation but does **not** participate in active failover.
 
-2. **HA Scope:** High Availability is configured **within a single VPC across two Availability Zones**. This deployment does NOT use cross-VPC HA or AWS Transit Gateway for Virtual IP routing.
+2. **SBCs Handle Failover:** During HA switchover, the **SBCs themselves** call AWS APIs to update route tables and move Virtual IPs. The HA subnet requires connectivity to AWS API endpoints.
 
-3. **Microsoft Integration Required:** All components require integration with Microsoft Entra ID (Azure AD) for authentication and Microsoft Graph API for Teams call quality data and user information.
+3. **Stack Manager Retained for Day 2:** Stack Manager is recommended to be retained (low cost t3.medium) for ongoing management tasks such as software updates, stack healing, and configuration changes.
 
-4. **Break Glass Accounts:** Each workload requires a dedicated local break glass account for emergency access when identity provider integration fails.
+4. **HA Scope:** High Availability is configured **within a single VPC across two Availability Zones**. This deployment does NOT use cross-VPC HA or AWS Transit Gateway for Virtual IP routing.
+
+5. **Microsoft Integration Required:** All components require integration with Microsoft Entra ID (Azure AD) for authentication and Microsoft Graph API for Teams call quality data and user information.
+
+6. **Break Glass Accounts:** Each workload requires a dedicated local break glass account for emergency access when identity provider integration fails.
 
 ### Scope
 
@@ -73,15 +78,21 @@ This guide covers:
 
 ### Stack Manager Requirement for Cross-AZ HA
 
-When deploying AudioCodes Mediant VE SBCs in High Availability across two Availability Zones in AWS, the **Stack Manager is a mandatory separate VM** that performs the following critical functions:
+When deploying AudioCodes Mediant VE SBCs in High Availability across two Availability Zones in AWS, the **Stack Manager is a mandatory separate VM for initial deployment** that performs the following critical functions:
 
-1. **Route Table Manipulation:** During failover, the Stack Manager updates AWS VPC route table entries to redirect traffic from the failed Active SBC to the Standby SBC.
+1. **Initial Stack Deployment:** The Stack Manager deploys and configures the SBC HA stack via CloudFormation, including all required network interfaces, security groups, and route table entries.
 
-2. **Virtual IP Address Management:** The Stack Manager allocates and manages Virtual IP addresses (by default from the `169.254.64.0/24` subnet) that exist outside the VPC CIDR range.
+2. **Virtual IP Address Management:** The Stack Manager allocates and manages Virtual IP addresses (by default from the `169.254.64.0/24` subnet) that exist outside the VPC CIDR range during initial deployment.
 
 3. **Cluster Lifecycle Management:** The Stack Manager handles initial deployment, topology updates, and "stack healing" in case of underlying cloud resource corruption.
 
+4. **Day 2 Operations:** While Stack Manager can technically be decommissioned after initial deployment, it is recommended to retain it for ongoing management tasks such as software updates, configuration changes, and stack maintenance.
+
+**Important Clarification:** The Stack Manager does **not** participate in active HA switchover. During failover, the **SBCs themselves** send AWS API commands to update route tables and move Virtual IPs to the newly active SBC. This is why the HA subnet requires connectivity to AWS API endpoints.
+
 ### How the Failover Mechanism Works
+
+**Key Point:** The SBCs themselves handle HA switchover by communicating directly with AWS APIs. The Stack Manager is used for initial deployment only and does not participate in active failover.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
@@ -95,6 +106,9 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 │   │  │  SBC (Active)  │  │   HA     │  │  SBC (Standby) │  │              │
 │   │  │                │◄─┼──Subnet──┼─►│                │  │              │
 │   │  │  ENI: 10.0.1.x │  │          │  │  ENI: 10.0.2.x │  │              │
+│   │  │                │  │          │  │                │  │              │
+│   │  │  Calls AWS API │  │          │  │  Calls AWS API │  │              │
+│   │  │  on failover   │  │          │  │  on failover   │  │              │
 │   │  └────────────────┘  │          │  └────────────────┘  │              │
 │   │                      │          │                      │              │
 │   └─────────────────────┘          └─────────────────────┘              │
@@ -102,17 +116,17 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 │   ┌────────────────────────────────────────────────────────────────┐    │
 │   │                     Stack Manager VM                            │    │
 │   │                                                                 │    │
-│   │  - Monitors SBC health via HA subnet                           │    │
-│   │  - On failover: Updates VPC Route Tables                       │    │
-│   │  - Manages Virtual IPs (169.254.64.x) in route tables          │    │
-│   │  - Requires EC2, CloudFormation, IAM API access                │    │
+│   │  - Deploys initial SBC HA stack via CloudFormation             │    │
+│   │  - Configures Virtual IPs (169.254.64.x) in route tables       │    │
+│   │  - Day 2: Software updates, stack healing, topology changes    │    │
+│   │  - Does NOT participate in active HA switchover                │    │
 │   └────────────────────────────────────────────────────────────────┘    │
 │                                                                          │
 │   ┌────────────────────────────────────────────────────────────────┐    │
-│   │  VPC Route Table (Updated by Stack Manager on Failover)        │    │
+│   │  VPC Route Table (Updated by SBC on Failover)                  │    │
 │   │                                                                 │    │
 │   │  169.254.64.1/32 → eni-xxxx (Active SBC's ENI)                 │    │
-│   │                    ↓ (On failover, Stack Manager updates to)   │    │
+│   │                    ↓ (On failover, SBC updates via AWS API)    │    │
 │   │  169.254.64.1/32 → eni-yyyy (Standby SBC's ENI, now Active)   │    │
 │   └────────────────────────────────────────────────────────────────┘    │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -129,11 +143,21 @@ The Virtual IP addresses are used for failover routing **within the same VPC**, 
 
 ### API Access Requirements
 
-The Stack Manager requires **internet access** (via Internet Gateway or NAT Gateway) to communicate with AWS APIs:
+#### Stack Manager API Access
+The Stack Manager requires **internet access** (via Internet Gateway or NAT Gateway) to communicate with AWS APIs for initial deployment and Day 2 operations:
 - EC2 API
 - CloudFormation API
 - IAM API
 - Elastic Load Balancing API (if using NLB)
+
+#### SBC API Access (Critical for HA Failover)
+The SBCs require **internet access from the HA subnet** to communicate with AWS APIs during failover. The SBCs themselves call AWS APIs to update route tables and move Virtual IPs during switchover:
+- EC2 API (route table manipulation, ENI management)
+
+**Important:** The HA subnet must have a route to AWS API endpoints, either via:
+- NAT Gateway (recommended for private subnets)
+- VPC Endpoints for EC2 (PrivateLink)
+- Internet Gateway (if using public IPs on HA interfaces - not recommended)
 
 ---
 
@@ -264,23 +288,57 @@ The Stack Manager requires **internet access** (via Internet Gateway or NAT Gate
 | Interface | Purpose | Subnet Type |
 |-----------|---------|-------------|
 | eth0 | Management, Signaling, Media (Main) | Main Subnet |
-| eth1 | HA Communication | HA Subnet (dedicated) |
+| eth1 | HA Communication + AWS API Access | HA Subnet (dedicated) |
 | eth2+ | Additional Signaling/Media (optional) | Additional Subnets |
+
+#### SBC IAM Role Requirements
+
+The SBCs require an IAM role to call AWS APIs during HA failover. The SBC directly manipulates route tables to redirect traffic during switchover.
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeRouteTables",
+                "ec2:CreateRoute",
+                "ec2:ReplaceRoute",
+                "ec2:DeleteRoute",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DescribeInstances"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+**Note:** The HA subnet must have connectivity to AWS API endpoints (via NAT Gateway or VPC Endpoint) for failover to function correctly.
 
 ### Stack Manager Specifications
 
 | Specification | Details |
 |--------------|---------|
-| **Purpose** | HA cluster deployment, lifecycle management, route table failover |
+| **Purpose** | HA cluster deployment, lifecycle management, Day 2 operations |
 | **EC2 Instance Type** | t3.medium |
 | **Storage** | 8 GiB gp3 (default) |
 | **Deployment** | One per region where SBC HA is deployed |
+| **Lifecycle** | Retained ongoing for Day 2 operations (low cost) |
 
 #### Critical Requirements
 
 - **Must reside in the same VPC** as the SBC instances it manages
 - **Requires internet access** (via IGW or NAT Gateway) for AWS API calls
 - **IAM Role** with EC2, CloudFormation, IAM, and optionally ELB permissions
+
+#### Operational Notes
+
+- **Does not participate in HA failover** - SBCs handle switchover directly via AWS APIs
+- **Can be decommissioned** after initial deployment if Day 2 operations are not required
+- **Recommended to retain** - low cost (t3.medium) and useful for software updates, stack healing, and configuration changes
+- See [Cyber Security Variation](#cyber-security-variation-stack-manager-component) section for security details
 
 ### AudioCodes Routing Manager (ARM) Specifications
 
@@ -2110,10 +2168,36 @@ Phase 8: Validation
 }
 ```
 
+### SBC IAM Policy (Required for HA Failover)
+
+The SBCs require their own IAM role to perform route table updates during HA failover. This is a more restrictive policy than the Stack Manager.
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:DescribeRouteTables",
+                "ec2:CreateRoute",
+                "ec2:ReplaceRoute",
+                "ec2:DeleteRoute",
+                "ec2:DescribeNetworkInterfaces",
+                "ec2:DescribeInstances"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
 ### IAM Role Creation Steps
 
+#### Stack Manager Role
+
 1. Navigate to **AWS IAM Console** > **Policies** > **Create Policy**
-2. Select **JSON** tab and paste the policy above
+2. Select **JSON** tab and paste the Stack Manager policy above
 3. Name the policy (e.g., `AudioCodes-StackManager-Policy`)
 4. Click **Create Policy**
 5. Navigate to **Roles** > **Create Role**
@@ -2123,9 +2207,199 @@ Phase 8: Validation
 9. Click **Create Role**
 10. Attach this role to the Stack Manager EC2 instance via **Actions** > **Security** > **Modify IAM Role**
 
+#### SBC Role
+
+1. Navigate to **AWS IAM Console** > **Policies** > **Create Policy**
+2. Select **JSON** tab and paste the SBC policy above
+3. Name the policy (e.g., `AudioCodes-SBC-HA-Policy`)
+4. Click **Create Policy**
+5. Navigate to **Roles** > **Create Role**
+6. Select **EC2** as the trusted entity
+7. Attach the policy created above
+8. Name the role (e.g., `AudioCodes-SBC-Role`)
+9. Click **Create Role**
+10. Attach this role to both SBC EC2 instances (typically done via Stack Manager during deployment)
+
 ---
 
-## 21. Licensing Considerations
+## 21. Cyber Security Variation: Stack Manager Component
+
+### Overview
+
+The **AudioCodes Stack Manager** is a new infrastructure component introduced to support High Availability SBC deployments across multiple AWS Availability Zones. This section documents the security considerations, permissions, and risk assessment required for cyber security approval.
+
+### Component Classification
+
+| Attribute | Value |
+|-----------|-------|
+| **Component Type** | Management/Orchestration VM |
+| **Vendor** | AudioCodes |
+| **Deployment** | AWS EC2 (t3.medium) |
+| **Network Zone** | Management Subnet |
+| **Data Classification** | Infrastructure Management |
+| **New Component** | Yes - Required for multi-AZ SBC HA deployment |
+
+### Functional Description
+
+The Stack Manager is a dedicated virtual machine that performs the following functions:
+
+#### Primary Functions (Initial Deployment)
+1. **CloudFormation Orchestration:** Creates and manages AWS CloudFormation stacks for SBC HA deployment
+2. **Network Configuration:** Configures ENIs, security groups, and route table entries for Virtual IPs
+3. **Virtual IP Allocation:** Allocates Virtual IPs from the 169.254.64.0/24 range for HA routing
+4. **Instance Provisioning:** Deploys SBC EC2 instances with correct IAM roles and network attachments
+
+#### Day 2 Operations (Ongoing Management)
+1. **Software Updates:** Facilitates SBC software upgrades across the HA pair
+2. **Stack Healing:** Repairs corrupted cloud resources or misconfigurations
+3. **Topology Changes:** Manages changes to SBC cluster topology
+4. **Configuration Backup:** Supports configuration backup and recovery operations
+
+#### What Stack Manager Does NOT Do
+- **Does NOT participate in active HA failover** - SBCs handle this directly via AWS API calls
+- Does NOT process voice traffic or signalling
+- Does NOT store call records or user data
+- Does NOT require persistent connections to SBCs during normal operation
+
+### IAM Permissions Required
+
+The Stack Manager requires an IAM role with the following permissions:
+
+```json
+{
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Action": [
+                "ec2:*",
+                "cloudformation:*",
+                "cloudwatch:DeleteAlarms",
+                "cloudwatch:PutMetricAlarm",
+                "iam:PassRole",
+                "iam:ListInstanceProfiles",
+                "iam:CreateServiceLinkedRole"
+            ],
+            "Resource": "*"
+        }
+    ]
+}
+```
+
+#### Permission Justification
+
+| Permission | Justification | Risk Level |
+|------------|---------------|------------|
+| `ec2:*` | Required to create/modify EC2 instances, ENIs, security groups, and route tables for SBC deployment | Medium |
+| `cloudformation:*` | Required to create and manage CloudFormation stacks for infrastructure-as-code deployment | Medium |
+| `cloudwatch:DeleteAlarms`, `cloudwatch:PutMetricAlarm` | Required to configure monitoring alarms for SBC health | Low |
+| `iam:PassRole` | Required to assign IAM roles to SBC instances during deployment | Medium |
+| `iam:ListInstanceProfiles` | Required to enumerate available instance profiles for SBC assignment | Low |
+| `iam:CreateServiceLinkedRole` | Required to create service-linked roles for AWS services (e.g., ELB) | Low |
+
+#### Scope Limitation Recommendations
+
+For enhanced security posture, consider restricting the `ec2:*` permission to specific resource ARNs or tags:
+
+```json
+{
+    "Effect": "Allow",
+    "Action": [
+        "ec2:*"
+    ],
+    "Resource": "*",
+    "Condition": {
+        "StringEquals": {
+            "ec2:ResourceTag/Project": "AudioCodes-Voice"
+        }
+    }
+}
+```
+
+### Network Security Requirements
+
+#### Inbound Traffic
+
+| Source | Protocol | Port | Purpose |
+|--------|----------|------|---------|
+| Admin CIDR | TCP | 22 | SSH Management |
+| Admin CIDR | TCP | 443 | HTTPS Web Management |
+
+#### Outbound Traffic
+
+| Destination | Protocol | Port | Purpose |
+|-------------|----------|------|---------|
+| AWS API Endpoints | TCP | 443 | EC2, CloudFormation, IAM API calls |
+| VPC CIDR | All | All | Communication with SBC instances |
+
+#### Network Placement
+
+- **Recommended:** Place in management subnet with NAT Gateway egress
+- **Not Recommended:** Direct internet exposure via public IP
+- **Alternative:** Use VPC Endpoints (PrivateLink) for AWS API access to eliminate internet egress requirement
+
+### Security Considerations
+
+#### Attack Surface Analysis
+
+| Vector | Risk | Mitigation |
+|--------|------|------------|
+| Web Management Interface | Medium | Restrict to admin CIDR, use strong authentication |
+| SSH Access | Medium | Key-based auth only, restrict to bastion/admin CIDR |
+| IAM Role Compromise | High | Use least-privilege, enable CloudTrail logging |
+| Network Exposure | Low | Private subnet, no public IP, security group restrictions |
+
+#### Data Handling
+
+| Data Type | Handled | Storage | Sensitivity |
+|-----------|---------|---------|-------------|
+| AWS API Credentials | Yes (via IAM Role) | None (instance metadata) | High |
+| SBC Configuration | Yes (during deployment) | Temporary | Medium |
+| Voice/Call Data | No | N/A | N/A |
+| User PII | No | N/A | N/A |
+
+#### Logging and Monitoring
+
+| Log Type | Source | Retention Recommendation |
+|----------|--------|-------------------------|
+| AWS API Calls | CloudTrail | 90 days minimum |
+| Stack Manager System Logs | EC2 instance | 30 days |
+| CloudFormation Events | CloudFormation | 90 days |
+
+### Compliance Considerations
+
+#### SOC 2 Relevance
+- Stack Manager has elevated AWS permissions - ensure access is restricted and logged
+- Include in quarterly access reviews
+- Document change management procedures for Stack Manager operations
+
+#### PCI-DSS Relevance
+- Stack Manager does not process, store, or transmit cardholder data
+- Included in scope as supporting infrastructure if voice system handles payment card information
+
+### Risk Assessment Summary
+
+| Risk Category | Rating | Notes |
+|---------------|--------|-------|
+| **Confidentiality** | Low | Does not handle sensitive user/call data |
+| **Integrity** | Medium | Has ability to modify infrastructure; changes are logged |
+| **Availability** | Low | Not in critical path for call processing; SBCs handle failover independently |
+| **Overall Risk** | Medium | Elevated AWS permissions require appropriate access controls |
+
+### Approval Checklist
+
+- [ ] IAM role created with documented permissions
+- [ ] Security group restricts access to admin CIDR only
+- [ ] CloudTrail logging enabled for AWS API calls
+- [ ] Break glass account configured and documented
+- [ ] Placed in private subnet with NAT Gateway egress
+- [ ] Access restricted to authorized personnel only
+- [ ] Included in vulnerability scanning scope
+- [ ] Change management process documented
+
+---
+
+## 22. Licensing Considerations
 
 ### Mediant VE SBC Licensing
 
@@ -2155,9 +2429,9 @@ Phase 8: Validation
 
 ---
 
-## 22. References and Documentation
+## 23. References and Documentation
 
-### 22.1 Official AudioCodes Documentation
+### 23.1 Official AudioCodes Documentation
 
 | Document | Version | URL |
 |----------|---------|-----|
@@ -2173,7 +2447,7 @@ Phase 8: Validation
 | Configure Microsoft Graph API | - | [Web](https://techdocs.audiocodes.com/live/customer-all-um/Content/PS%20Installation/Step%202%20Configure%20Microsoft.htm) |
 | SBC Teams Direct Routing Config | - | [PDF](https://www.audiocodes.com/media/13253/connecting-audiocodes-sbc-to-microsoft-teams-direct-routing-enterprise-model-configuration-note.pdf) |
 
-### 22.2 Microsoft Documentation
+### 23.2 Microsoft Documentation
 
 | Document | URL |
 |----------|-----|
@@ -2186,7 +2460,7 @@ Phase 8: Validation
 | Microsoft Graph CallRecords API | [Microsoft Learn](https://learn.microsoft.com/en-us/graph/api/resources/callrecords-api-overview) |
 | Microsoft Trusted Root Certificate Program | [Microsoft Learn](https://docs.microsoft.com/en-us/security/trusted-root/participants-list) |
 
-### 22.3 AudioCodes Product Pages
+### 23.3 AudioCodes Product Pages
 
 | Product | URL |
 |---------|-----|
@@ -2195,7 +2469,7 @@ Phase 8: Validation
 | OVOC | [Product Page](https://www.audiocodes.com/solutions-products/products/management-products-solutions/one-voice-operations-center) |
 | Device Manager | [Product Page](https://www.audiocodes.com/solutions-products/products/management-products-solutions/device-manager) |
 
-### 22.4 AWS Marketplace Links
+### 23.4 AWS Marketplace Links
 
 | Product | URL |
 |---------|-----|
@@ -2204,7 +2478,7 @@ Phase 8: Validation
 | Stack Manager | [AWS Marketplace](https://aws.amazon.com/marketplace/search/results?searchTerms=audiocodes+stack+manager) |
 | ARM | [AWS Marketplace](https://aws.amazon.com/marketplace/search/results?searchTerms=audiocodes+arm) |
 
-### 22.5 Third-Party References
+### 23.5 Third-Party References
 
 | Source | Description | URL |
 |--------|-------------|-----|
@@ -2780,6 +3054,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | Version | Date | Author | Changes |
 |---------|------|--------|---------|
 | 1.0 | February 2026 | KS | Initial release - Unified deployment guide consolidating AWS deployment and SBC configuration documentation |
+| 1.1 | February 2026 | KS | Clarified Stack Manager role (deployment only, not active failover); Added SBC IAM requirements for HA failover; Added Cyber Security Variation section; Updated failover mechanism documentation; Stack Manager retained for Day 2 operations |
 
 ---
 
