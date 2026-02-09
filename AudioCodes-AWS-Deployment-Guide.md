@@ -491,6 +491,7 @@ All AudioCodes components require integration with Microsoft Entra ID (formerly 
 | AudioCodes-ARM-WebUI | ARM | Web UI authentication |
 | AudioCodes-ARM-REST-API | ARM | REST API authentication |
 | AudioCodes-SBC-DirectRouting | SBC | Teams Direct Routing SBA (if applicable) |
+| AudioCodes-SBC-Management | Proxy SBC | Web UI OAuth authentication (see [Section 10.4](#104-sbc-management-authentication)) |
 
 ---
 
@@ -944,7 +945,7 @@ The following table details the compute resource requirements for all components
 - Disable or block all unused services and network ports (e.g., HTTP, TFTP, FTP, Telnet, unused SIP transport) and allow only explicitly required signaling/media ranges.
 - Enable SBC VoIP firewall / classification protection features to rate limit malformed SIP, block scans, and protect from DoS/registration attacks.
 - Change default Admin/User credentials and, where possible, rename default usernames; enforce password complexity and expiry using the SBC password policy parameters.
-- Integrate management authentication with corporate LDAP/AD or RADIUS so roles are mapped from directory groups (e.g., NOC Monitor, Voice Admin, Sec Admin).
+- Integrate management authentication with corporate LDAP/AD or RADIUS so roles are mapped from directory groups (e.g., NOC Monitor, Voice Admin, Sec Admin). See [Section 10.4: SBC Management Authentication](#104-sbc-management-authentication) for detailed configuration.
 - Restrict Security Administrator role to a minimal number of users; use separate named accounts (no shared logins) and enable account lockout on failed login thresholds.
 - Limit per-role Web page/CLI permissions so Monitor is strictly read only and day-to-day operations use Admin, reserving Security Admin for security and system-wide changes.
 
@@ -965,6 +966,242 @@ AudioCodes SBCs implement a built-in role hierarchy for administrative access co
 - Disable or remove any unused local user accounts; if external auth (LDAP/RADIUS) is in place, keep only a single local break glass account stored offline.
 - Disable legacy/weak management protocols (Telnet, HTTP, SNMPv1) and use only HTTPS, SSH, and SNMPv3 with strong credentials and, where supported, encryption.
 - Keep SBC software at a vendor-supported release; apply security patches per change process and review AudioCodes security/hardening guidelines at each upgrade.
+
+### 10.4 SBC Management Authentication
+
+This section describes the authentication architecture for SBC management access, implementing a split identity model where Proxy SBCs (AWS) authenticate against Microsoft Entra ID and Downstream SBCs (on-premises) authenticate against on-premises Active Directory.
+
+#### Authentication Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         CLOUD (AWS)                                  │
+│                                                                      │
+│   ┌──────────────┐         ┌──────────────────────┐                │
+│   │  Proxy SBC   │◄───────►│  Microsoft Entra ID  │                │
+│   │  (HA Pair)   │  OAuth  │  (Azure AD)          │                │
+│   └──────────────┘         └──────────────────────┘                │
+│          │                                                          │
+└──────────┼──────────────────────────────────────────────────────────┘
+           │ Direct Connect
+           │
+┌──────────┼──────────────────────────────────────────────────────────┐
+│          │              ON-PREMISES                                  │
+│          ▼                                                          │
+│   ┌──────────────┐         ┌──────────────────────┐                │
+│   │ Downstream   │◄───────►│  Active Directory    │                │
+│   │ SBCs         │  LDAPS  │  Domain Controllers  │                │
+│   └──────────────┘         └──────────────────────┘                │
+│                                                                      │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Rationale for Split Identity Model:**
+
+| Component | Identity Provider | Rationale |
+|-----------|------------------|-----------|
+| Proxy SBC (AWS) | Microsoft Entra ID | Cloud-native authentication; internet-accessible management; aligns with Teams Direct Routing integration |
+| Downstream SBC (On-prem) | On-premises Active Directory | Offline resilience during cloud or WAN outages; local authentication ensures continued management access |
+
+#### Proxy SBC: Microsoft Entra ID (OAuth 2.0) Configuration
+
+The Proxy SBC uses OAuth 2.0 authentication via Microsoft Entra ID for web-based management access. This requires a dedicated App Registration separate from other AudioCodes component registrations.
+
+##### App Registration: SBC Management
+
+1. Navigate to **Azure Portal** > **Microsoft Entra ID** > **App registrations** > **New registration**
+2. Configure:
+   - **Name:** `AudioCodes-SBC-Management`
+   - **Supported account types:** Accounts in this organizational directory only (Single tenant)
+   - **Redirect URI:** Web - `https://<proxy-sbc-fqdn>/api/v1/auth/oauth2/callback`
+3. Click **Register**
+
+##### Credentials to Capture
+
+| Credential | Location | Usage |
+|------------|----------|-------|
+| Application (Client) ID | Overview blade | SBC OAuth configuration |
+| Directory (Tenant) ID | Overview blade | SBC OAuth configuration |
+| Client Secret | Certificates & secrets blade | SBC OAuth configuration |
+
+##### Client Secret Creation
+
+1. Navigate to **Certificates & secrets** > **Client secrets** > **New client secret**
+2. Description: `SBC-Management-OAuth`
+3. Expiry: Select appropriate expiry (recommend 24 months with calendar reminder)
+4. **IMPORTANT:** Copy the secret value immediately - it cannot be retrieved later
+
+##### Token Configuration
+
+1. Navigate to **Token configuration** > **Add optional claim**
+2. Token type: **ID**
+3. Select claims: `email`, `preferred_username`, `groups`
+4. Click **Add**
+
+##### Entra ID Security Groups for Role Mapping
+
+Create the following security groups in Microsoft Entra ID for SBC role assignment:
+
+| Entra ID Group | SBC Role | Description |
+|----------------|----------|-------------|
+| `SG-SBC-SecurityAdmin` | Security Administrator | Full security and configuration control |
+| `SG-SBC-Admin` | Administrator | Configuration and operations access |
+| `SG-SBC-Monitor` | Monitor | Read-only access to configuration and status |
+
+##### SBC OAuth Configuration
+
+Configure OAuth on the Proxy SBC via **Setup** > **Administration** > **Web & CLI** > **OAuth Settings**:
+
+| Parameter | Value |
+|-----------|-------|
+| OAuth Mode | Enabled |
+| Provider | Azure AD |
+| Client ID | `<Application (Client) ID>` |
+| Client Secret | `<Client Secret Value>` |
+| Tenant ID | `<Directory (Tenant) ID>` |
+| Redirect URI | `https://<proxy-sbc-fqdn>/api/v1/auth/oauth2/callback` |
+
+##### SBC Group-to-Role Mapping
+
+Configure role mapping via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **OAuth Group Mapping**:
+
+| Group Object ID | Assigned Role |
+|-----------------|---------------|
+| `<SG-SBC-SecurityAdmin Object ID>` | Security Administrator |
+| `<SG-SBC-Admin Object ID>` | Administrator |
+| `<SG-SBC-Monitor Object ID>` | Monitor |
+
+> **Note:** Use the Entra ID Group Object ID (GUID), not the display name.
+
+#### Downstream SBC: On-Premises Active Directory (LDAPS) Configuration
+
+Downstream SBCs authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636). This ensures continued management access during cloud outages or Direct Connect failures.
+
+##### Prerequisites
+
+- Active Directory Domain Controllers with LDAPS enabled (port 636)
+- Valid TLS certificate on Domain Controllers (see Certificate Requirements below)
+- Service account for LDAP bind operations
+- AD security groups for role mapping
+
+##### LDAPS Certificate Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| Certificate Type | Server authentication certificate on each Domain Controller |
+| Subject/SAN | Must include DC FQDN (e.g., `dc01.corp.example.com`) |
+| Trust Chain | SBC must trust the issuing CA (import root/intermediate CA certificates) |
+| Key Usage | Digital Signature, Key Encipherment |
+| Extended Key Usage | Server Authentication (1.3.6.1.5.5.7.3.1) |
+
+##### Importing CA Certificates to SBC
+
+1. Navigate to **Setup** > **IP Network** > **Security** > **TLS Contexts**
+2. Select the management TLS context
+3. Under **Trusted Root Certificates**, click **Import**
+4. Upload the root CA certificate (and intermediate if applicable)
+5. Verify the certificate appears in the trusted list
+
+##### LDAP Server Configuration
+
+Configure LDAP on the Downstream SBC via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **LDAP**:
+
+| Parameter | Value |
+|-----------|-------|
+| LDAP Mode | Enabled |
+| Server Type | Microsoft Active Directory |
+| Primary Server | `ldaps://dc01.corp.example.com:636` |
+| Secondary Server | `ldaps://dc02.corp.example.com:636` |
+| Bind DN | `CN=svc-sbc-ldap,OU=Service Accounts,DC=corp,DC=example,DC=com` |
+| Bind Password | `<Service Account Password>` |
+| Base DN | `DC=corp,DC=example,DC=com` |
+| User Search Filter | `(&(objectClass=user)(sAMAccountName=%s))` |
+| Connection Security | LDAPS (TLS) |
+| Verify Server Certificate | Enabled |
+
+##### Service Account Requirements
+
+| Requirement | Details |
+|-------------|---------|
+| Account Type | Domain user account (not a computer account) |
+| Permissions | Read access to user objects and group membership |
+| Password Policy | Non-expiring password or managed rotation |
+| Naming Convention | `svc-sbc-ldap-<site>` (e.g., `svc-sbc-ldap-sydney`) |
+| OU Placement | Dedicated Service Accounts OU |
+
+> **Security Note:** The bind account requires only read permissions. Do not grant write or administrative privileges.
+
+##### Active Directory Security Groups for Role Mapping
+
+Create the following security groups in Active Directory for SBC role assignment:
+
+| AD Group | SBC Role | Description |
+|----------|----------|-------------|
+| `SBC-SecurityAdmin-<Site>` | Security Administrator | Full security and configuration control |
+| `SBC-Admin-<Site>` | Administrator | Configuration and operations access |
+| `SBC-Monitor-<Site>` | Monitor | Read-only access to configuration and status |
+
+> **Note:** Site-specific groups (e.g., `SBC-Admin-Sydney`) allow granular access control per location.
+
+##### SBC Group-to-Role Mapping
+
+Configure role mapping via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **LDAP Group Mapping**:
+
+| AD Group DN | Assigned Role |
+|-------------|---------------|
+| `CN=SBC-SecurityAdmin-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Security Administrator |
+| `CN=SBC-Admin-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Administrator |
+| `CN=SBC-Monitor-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Monitor |
+
+##### Multiple Domain Controller Configuration
+
+For redundancy, configure both primary and secondary LDAP servers pointing to different Domain Controllers:
+
+| Configuration | Primary DC | Secondary DC |
+|---------------|------------|--------------|
+| Sydney Site | `dc01-syd.corp.example.com` | `dc02-syd.corp.example.com` |
+| Melbourne Site | `dc01-mel.corp.example.com` | `dc02-mel.corp.example.com` |
+
+The SBC will automatically failover to the secondary server if the primary becomes unavailable.
+
+#### Emergency Access: Break Glass Accounts
+
+Local break glass accounts provide emergency access when identity providers are unavailable. For break glass account configuration and procedures, see [Section 17: Break Glass Accounts](#17-break-glass-accounts).
+
+**When to use break glass accounts:**
+
+- Microsoft Entra ID unavailable (Proxy SBC)
+- Active Directory Domain Controllers unreachable (Downstream SBC)
+- OAuth or LDAP misconfiguration preventing authentication
+- Network connectivity issues to identity providers
+
+#### Network and Security Requirements
+
+##### Firewall Rules
+
+Ensure the following firewall rules are in place (see [Section 16: Firewall Rules](#16-firewall-rules) for complete rule sets):
+
+| Source | Destination | Port | Protocol | Purpose |
+|--------|-------------|------|----------|---------|
+| Proxy SBC | Microsoft Entra ID (Internet) | 443 | TCP/HTTPS | OAuth token requests |
+| Downstream SBC | Domain Controllers | 636 | TCP/LDAPS | LDAP authentication |
+
+##### Entra ID Network Endpoints
+
+The Proxy SBC requires outbound HTTPS access to Microsoft Entra ID endpoints:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `login.microsoftonline.com` | OAuth authentication |
+| `graph.microsoft.com` | Group membership queries (if configured) |
+
+##### LDAPS Network Path Security
+
+| Requirement | Details |
+|-------------|---------|
+| Encryption | TLS 1.2 minimum (LDAPS enforces encryption) |
+| Network Segmentation | Management interface should be on dedicated management VLAN |
+| Firewall | Permit only SBC management IP to DC LDAPS port |
 
 ---
 
