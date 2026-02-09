@@ -1211,7 +1211,7 @@ The Proxy SBC requires outbound HTTPS access to Microsoft Entra ID endpoints:
 
 #### SBC Configuration Concept in Teams Direct Routing
 
-In the Teams Direct Routing Enterprise Model, the Proxy SBC connects Microsoft Teams Phone System to the PSTN and downstream SBC infrastructure. The SBC maintains separate network interfaces for internal (LAN) connectivity toward downstream SBCs, Cisco, PBX systems and external (WAN) connectivity toward Microsoft Teams and PSTN providers. Management and HA interfaces operate on dedicated subnets for administrative access and failover coordination respectively.
+In the Teams Direct Routing Enterprise Model, the Proxy SBC connects Microsoft Teams Phone System to the PSTN and downstream SBC infrastructure. The SBC maintains separate network interfaces for internal (LAN) connectivity toward downstream SBCs, third-party PBX systems and external (WAN) connectivity toward Microsoft Teams and PSTN providers. Management and HA interfaces operate on dedicated subnets for administrative access and failover coordination respectively.
 
 #### Proxy SBC Virtual Ports
 
@@ -1345,7 +1345,7 @@ The Proxy SBC requires four IP interfaces corresponding to the four Ethernet Dev
 **Design Notes:**
 
 - **Index 0 (OAMP):** The Operations, Administration, Maintenance, and Provisioning interface is used for SBC management access (Web GUI, CLI, SNMP, syslog). This interface must be reachable from the network management systems.
-- **Index 1 (Internal LAN - Media + Control):** Carries SIP signaling and RTP media for internal/trusted trunk connections including Downstream SBCs, Cisco Webex DI, third-party PBX systems, and PSTN SIP trunk providers connected on the LAN side.
+- **Index 1 (Internal LAN - Media + Control):** Carries SIP signaling and RTP media for internal/trusted trunk connections including Downstream SBCs, third-party PBX systems, and PSTN SIP trunk providers connected on the LAN side.
 - **Index 2 (External WAN - Media + Control):** Carries SIP signaling (TLS) and SRTP media for the Microsoft Teams Direct Routing connection. The IP address is the DMZ-facing address, the gateway is the DMZ router/firewall IP, and the DNS server is provided by the ISP or is the enterprise DNS server capable of resolving Microsoft 365 FQDNs.
 - **Index 3 (HA - Maintenance):** Dedicated to HA heartbeat and state synchronisation. The Maintenance application type ensures this interface is used exclusively for HA purposes.
 
@@ -1510,7 +1510,7 @@ The Proxy SBC requires three Media Realms to handle media for internal trunk tra
 
 **Design Notes:**
 
-- **Internal_Media_Realm (Index 0):** Used for RTP media sessions between the Proxy SBC and internal entities such as Downstream SBCs, Cisco Webex DI, third-party PBX systems, and registered endpoints. Bound to the Internal (LAN) interface.
+- **Internal_Media_Realm (Index 0):** Used for RTP media sessions between the Proxy SBC and internal entities such as Downstream SBCs, third-party PBX systems, and registered endpoints. Bound to the Internal (LAN) interface.
 - **M365_Media_Realm (Index 1):** Dedicated to RTP/SRTP media sessions between the Proxy SBC and Microsoft Teams (via the External/WAN/DMZ interface). This realm is bound to the External (WAN) interface so that media traffic egresses through the DMZ. Firewall rules must permit the configured RTP port range on this interface.
 - **PSTN_Media_Realm (Index 2):** Used for RTP media sessions between the Proxy SBC and the PSTN SIP trunk provider. Bound to the Internal (LAN) interface. A separate Media Realm is used (rather than sharing Internal_Media_Realm) to maintain distinct port ranges for troubleshooting and capacity management.
 - **Media Session Legs:** Each Media Realm is configured with 1000 media session legs. Each call consumes two legs (one for each direction), so each realm supports approximately 500 concurrent calls. Adjust this value based on expected call volumes and SBC licensing.
@@ -1579,7 +1579,7 @@ The Proxy SBC requires three SIP Interfaces: one for internal SIP trunk signalin
 
 **Design Notes:**
 
-- **Index 0 -- Internal (LAN):** Listens on a UDP port for SIP signaling from Downstream SBCs, Cisco Webex DI, third-party PBX systems, and other internal trunk endpoints. TCP and TLS are disabled (port 0) as internal signaling uses UDP. Classification Failure Response is set to 500 (Server Internal Error) to reject unclassified calls gracefully.
+- **Index 0 -- Internal (LAN):** Listens on a UDP port for SIP signaling from Downstream SBCs, third-party PBX systems, and other internal trunk endpoints. TCP and TLS are disabled (port 0) as internal signaling uses UDP. Classification Failure Response is set to 500 (Server Internal Error) to reject unclassified calls gracefully.
 - **Index 1 -- PSTN:** Listens on a separate UDP port on the Internal (LAN) interface for SIP signaling from the PSTN SIP trunk provider. Using a different port from the Internal (LAN) SIP Interface allows the SBC to distinguish PSTN traffic from other internal trunk traffic. Classification Failure Response is set to 500.
 - **Index 2 -- External (WAN):** Listens on TLS port 5061 for SIP signaling from Microsoft Teams Direct Routing. UDP and TCP are disabled (port 0) as Microsoft Teams requires TLS exclusively. TCP Keepalive is **enabled** to maintain persistent TCP/TLS connections with Microsoft Teams. Classification Failure Response is set to **0** (no response) as a Denial-of-Service (DoS) mitigation measure -- unclassified SIP messages from the external interface are silently dropped rather than responded to, preventing reconnaissance and amplification attacks. The TLS Context is set to "Teams" to use the certificate configured in Section 12.
 
@@ -1612,20 +1612,19 @@ The Proxy SBC maintains Proxy Sets for all trunk destinations in the architectur
 |-------|----------------------------------|------------------------|-----------------------|---------------------|----------------|-----------------------------|
 | 1     | Teams Direct Routing             | External (WAN)         | Teams Direct Routing  | Using-OPTIONS       | Enable         | Random-Weights              |
 | 2     | Prod_Downstream SBC              | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 3     | Cisco AU DI                      | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 4     | Cisco US DI                      | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 5     | 3rd Party PBX & Radio Systems    | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 6     | PSTN (Telco)                     | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 7     | Proxy-to-Proxy                   | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 3     | 3rd Party PBX & Radio Systems    | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 4     | SIP Provider AU                  | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 5     | SIP Provider US                  | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 6     | Proxy-to-Proxy                   | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
 
 **Design Notes:**
 
 - **Teams Direct Routing (Index 1):** Uses the External (WAN) SIP Interface and the "Teams Direct Routing" TLS Context for secure SIP connectivity to Microsoft Teams. Load Balancing Method is set to **Random-Weights** to distribute calls across the Microsoft Teams SIP proxies. Proxy Hot Swap is enabled for automatic failover.
 - **Prod_Downstream SBC (Index 2):** Routes signaling to the downstream SBC cluster via the Internal (LAN) interface. SIP OPTIONS-based keep-alive monitors the health of each downstream SBC. Hot Swap is enabled for failover between downstream SBC nodes.
-- **Cisco AU DI (Index 3) / Cisco US DI (Index 4):** Proxy Sets for the Cisco Webex Dedicated Instance environments in Australia and the United States respectively.
-- **3rd Party PBX & Radio Systems (Index 5):** Proxy Set for legacy PBX systems and radio/emergency communication systems.
-- **PSTN (Telco) (Index 6):** Proxy Set for the PSTN SIP trunk provider connected to the Proxy SBC. This is the primary PSTN breakout for sites without local breakout capability.
-- **Proxy-to-Proxy (Index 7):** Enables signaling between the two Proxy SBCs (e.g., AU Proxy to US Proxy) for inter-region call routing and failover.
+- **3rd Party PBX & Radio Systems (Index 3):** Proxy Set for legacy PBX systems and radio/emergency communication systems.
+- **SIP Provider AU (Index 4):** Proxy Set for the Australian SIP trunk provider connected to the Australian Proxy SBC. Provides regional PSTN breakout for Australian traffic via the local carrier.
+- **SIP Provider US (Index 5):** Proxy Set for the US SIP trunk provider connected to the US Proxy SBC. Provides regional PSTN breakout for US traffic via the local carrier.
+- **Proxy-to-Proxy (Index 6):** Enables signaling between the two Proxy SBCs (e.g., AU Proxy to US Proxy) for inter-region call routing and failover.
 - **Proxy Keep-Alive (Using-OPTIONS):** All Proxy Sets use SIP OPTIONS messages as keep-alive probes to continuously monitor the availability of each target entity. If an entity fails to respond to OPTIONS, the SBC marks it as unavailable and triggers Hot Swap failover.
 
 Each Proxy Set contains one or more **Proxy Address entries** (not shown in this table) that define the specific IP addresses or FQDNs, ports, and priority/weight of each target entity within the Proxy Set. These are configured in the Proxy Address table associated with each Proxy Set.
@@ -1662,7 +1661,6 @@ The Proxy SBC uses multiple IP Profiles to apply trunk-specific signaling and me
 | Proxy_Downstream_Internal_Profile     | AudioCodersGroups_0  | Not Secured             | Handle Locally        | Handle Locally      | Handle Locally           |
 | Teams Direct Routing Profile          | AudioCodersGroups_0  | Secured                 | Handle Locally        | Handle Locally      | Handle Locally           |
 | PSTN_Profile                          | AudioCodersGroups_0  | Not Secured             | Handle Locally        | Handle Locally      | Handle Locally           |
-| Webex_DI_Profile                      | AudioCodersGroups_0  | Not Secured             | Handle Locally        | Handle Locally      | Handle Locally           |
 | 3rd Party PBX Profile                 | AudioCodersGroups_0  | Not Secured             | Handle Locally        | Handle Locally      | Handle Locally           |
 | Registered Endpoints Profile          | AudioCodersGroups_0  | Not Secured             | Handle Locally        | Handle Locally      | Handle Locally           |
 
@@ -1671,7 +1669,6 @@ The Proxy SBC uses multiple IP Profiles to apply trunk-specific signaling and me
 - **Proxy_Downstream_Internal_Profile:** Applied to internal trunks between the Proxy SBC and Downstream SBCs, as well as the Proxy-to-Proxy trunk. Media security is set to "Not Secured" as internal traffic does not require SRTP encryption.
 - **Teams Direct Routing Profile:** Applied to the Microsoft Teams Direct Routing trunk. Media Security Behavior is set to **Secured**, which forces the SBC to use SRTP for all media sessions on this trunk. Microsoft Teams requires SRTP for media encryption. The SBC terminates SRTP on the Teams side and bridges to RTP on the internal side (or vice versa).
 - **PSTN_Profile:** Applied to PSTN SIP trunk connections. Media is "Not Secured" (standard RTP) as most PSTN carriers do not support SRTP.
-- **Webex_DI_Profile:** Applied to Cisco Webex Dedicated Instance trunks. Media is "Not Secured" (standard RTP) for internal connectivity.
 - **3rd Party PBX Profile:** Applied to legacy PBX and radio system trunks. Media is "Not Secured".
 - **Registered Endpoints Profile:** Applied to locally registered SIP endpoints. Media is "Not Secured".
 - **Remote REFER/3XX/REPLACES -- Handle Locally:** All IP Profiles are configured to handle REFER, 3xx redirect, and REPLACES messages locally on the SBC. This means the SBC intercepts these messages and performs the call transfer, redirect, or replacement on behalf of the endpoints, rather than forwarding the messages transparently. This ensures consistent behavior regardless of endpoint capabilities and provides the SBC with full visibility and control over call transfers and redirects.
@@ -1707,20 +1704,19 @@ The Proxy SBC maintains IP Groups for all trunk destinations in the architecture
 |------------------------------|-----------------------------------|----------------------|---------------------------------------|-----------------------|
 | Teams Direct Routing Trunk   | Teams Direct Routing              | M365_Media_Realm     | Teams Direct Routing Profile          | Teams Direct Routing  |
 | Downstream SBC Trunk         | Prod_AU_Downstream SBC            | Internal_Media_Realm | Proxy_Downstream_Internal_Profile     | Default               |
-| Cisco AU DI Trunk            | Cisco AU DI                       | Internal_Media_Realm | Proxy_Downstream_Internal_Profile     | Default               |
 | 3rd Party PBX Trunk          | 3rd Party PBX & Radio Systems     | Internal_Media_Realm | Proxy_Downstream_Internal_Profile     | Default               |
-| PSTN (Telco) Trunk           | PSTN (Telco)                      | PSTN_Media_Realm     | PSTN_Profile                          | Default               |
+| SIP Provider AU Trunk        | SIP Provider AU                   | PSTN_Media_Realm     | PSTN_Profile                          | Default               |
+| SIP Provider US Trunk        | SIP Provider US                   | PSTN_Media_Realm     | PSTN_Profile                          | Default               |
 | User                         | Registered Endpoints              | Internal_Media_Realm | Registered Endpoints Profile          | Default               |
-| Cisco US DI Trunk            | Cisco US DI                       | Internal_Media_Realm | Proxy_Downstream_Internal_Profile     | Default               |
 | Proxy-to-Proxy Trunk         | Proxy-to-Proxy                    | Internal_Media_Realm | Proxy_Downstream_Internal_Profile     | Default               |
 
 **Design Notes:**
 
 - **Teams Direct Routing Trunk:** Uses the M365_Media_Realm (bound to the External/WAN interface), the Teams Direct Routing IP Profile (with SRTP enabled), and the "Teams Direct Routing" TLS Context for secure SIP signaling.
 - **Downstream SBC Trunk:** Connects the Proxy SBC to the downstream SBC cluster using internal media and signaling.
-- **Cisco AU DI Trunk / Cisco US DI Trunk:** Separate IP Groups for the Australian and US Cisco Webex Dedicated Instance environments, enabling independent routing and policy application.
 - **3rd Party PBX Trunk:** Aggregates connectivity to legacy PBX and radio/emergency systems.
-- **PSTN (Telco) Trunk:** Uses the dedicated PSTN_Media_Realm and PSTN_Profile for PSTN SIP trunk connectivity.
+- **SIP Provider AU Trunk:** Uses the dedicated PSTN_Media_Realm and PSTN_Profile for Australian regional PSTN breakout. Configured on the Australian Proxy SBC to route outbound calls to the Australian carrier.
+- **SIP Provider US Trunk:** Uses the dedicated PSTN_Media_Realm and PSTN_Profile for US regional PSTN breakout. Configured on the US Proxy SBC to route outbound calls to the US carrier.
 - **User:** Represents locally registered SIP endpoints on the Proxy SBC.
 - **Proxy-to-Proxy Trunk:** Enables inter-region signaling between the AU and US Proxy SBCs.
 - **TLS Context:** Only the Teams Direct Routing Trunk uses a dedicated TLS Context ("Teams Direct Routing"). All other trunks use the "Default" TLS Context (which may have no certificate configured, as they use unencrypted SIP).
@@ -1813,18 +1809,16 @@ The ARM routing logic on each SBC role supports the following connectivity scena
 
 | Source Entity                         | Destination Entity                    | SBC Role     |
 |---------------------------------------|---------------------------------------|--------------|
-| Microsoft Teams                       | PSTN (via Proxy or LBO)              | Proxy SBC    |
+| Microsoft Teams                       | Regional SIP Provider (AU/US)        | Proxy SBC    |
 | Microsoft Teams                       | Downstream SBC / Registered Endpoints | Proxy SBC    |
-| Microsoft Teams                       | Cisco Webex DI (AU/US)               | Proxy SBC    |
 | Microsoft Teams                       | 3rd Party PBX / Radio Systems        | Proxy SBC    |
-| PSTN SIP Trunk Provider              | Microsoft Teams                       | Proxy SBC    |
-| PSTN SIP Trunk Provider              | Downstream SBC / Registered Endpoints | Proxy SBC    |
+| SIP Provider AU                       | Microsoft Teams                       | AU Proxy SBC |
+| SIP Provider US                       | Microsoft Teams                       | US Proxy SBC |
+| SIP Provider (AU/US)                  | Downstream SBC / Registered Endpoints | Proxy SBC    |
 | Downstream SBC                        | Microsoft Teams (via Proxy)           | Proxy SBC    |
-| Downstream SBC                        | PSTN (via Proxy)                     | Proxy SBC    |
-| Cisco Webex DI                        | Microsoft Teams                       | Proxy SBC    |
-| Cisco Webex DI                        | PSTN                                 | Proxy SBC    |
+| Downstream SBC                        | Regional SIP Provider (via Proxy)    | Proxy SBC    |
 | 3rd Party PBX / Radio Systems        | Microsoft Teams                       | Proxy SBC    |
-| 3rd Party PBX / Radio Systems        | PSTN                                 | Proxy SBC    |
+| 3rd Party PBX / Radio Systems        | Regional SIP Provider (AU/US)        | Proxy SBC    |
 | Proxy SBC (AU)                        | Proxy SBC (US) and vice versa        | Proxy SBC    |
 | Registered Endpoints                  | Proxy SBC (upstream)                 | Downstream   |
 | Proxy SBC                             | Registered Endpoints                 | Downstream   |
@@ -1848,7 +1842,7 @@ The routing rules are evaluated in index order (top-down) and the first matching
 3. **Manipulation:** Calling/called number manipulation set references for number translation during routing.
 4. **Alternative Routes:** Index references to alternative routing rules that are invoked if the primary route fails (e.g., SIP 4xx/5xx response or timeout).
 
-> **Note:** The complete IP-to-IP Call Routing table with all rules, number patterns, manipulation references, and alternative route indices is defined in the site-specific implementation worksheet and is configured during the SBC deployment phase. The routing logic is validated during integration testing with all connected systems (Microsoft Teams, PSTN, Cisco Webex DI, PBX, and radio systems) to ensure correct call routing, number presentation, and failover behavior.
+> **Note:** The complete IP-to-IP Call Routing table with all rules, number patterns, manipulation references, and alternative route indices is defined in the site-specific implementation worksheet and is configured during the SBC deployment phase. The routing logic is validated during integration testing with all connected systems (Microsoft Teams, regional SIP providers, PBX, and radio systems) to ensure correct call routing, number presentation, and failover behavior. Each regional Proxy SBC (AU/US) routes PSTN-bound calls to its respective regional SIP provider for local carrier breakout.
 
 ---
 
@@ -1897,23 +1891,23 @@ This section details all firewall rules required for the AudioCodes SBC solution
 | | Teams → SBC | UDP | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | SBC Public IP Address | 20000-29999 | Media |
 | | SBC → Teams | UDP | SBC Public IP Address | 20000-29999 | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | Media |
 
-#### Integration with CISCO
+#### Integration with SIP Provider AU (Australian Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with CISCO | CISCO → SBC | UDP/TCP | CISCO IP/s | Any | SBC Internal IP Address | 5060, 5061 | SIP Signalling |
-| | SBC → CISCO | UDP/TCP | SBC Internal IP Address | Any | CISCO IP/s | 5060, 5061 | SIP Signalling |
-| | CISCO → SBC | UDP | CISCO IP/s | Any | SBC Internal IP Address | 6000-9999 | Media |
-| | SBC → CISCO | UDP | SBC Internal IP Address | 6000-9999 | CISCO IP/s | Any | Media |
+| Integration with SIP Provider AU | SIP Provider AU → SBC | UDP/TCP | SIP Provider AU IP/s | Any | AU Proxy SBC Internal IP Address | 5060, 5061 | SIP Signalling |
+| | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC Internal IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling |
+| | SIP Provider AU → SBC | UDP | SIP Provider AU IP/s | Any | AU Proxy SBC Internal IP Address | 40000-49999 | Media |
+| | SBC → SIP Provider AU | UDP | AU Proxy SBC Internal IP Address | 40000-49999 | SIP Provider AU IP/s | Any | Media |
 
-#### Integration with PSTN Provider
+#### Integration with SIP Provider US (US Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with PSTN Provider | PSTN Provider → SBC | UDP/TCP | PSTN Provider IP/s | Any | SBC Internal IP Address | 5060, 5061 | SIP Signalling |
-| | SBC → PSTN Provider | UDP/TCP | SBC Internal IP Address | Any | PSTN Provider IP/s | 5060, 5061 | SIP Signalling |
-| | PSTN Provider → SBC | UDP | PSTN Provider IP/s | Any | SBC Internal IP Address | 40000-49999 | Media |
-| | SBC → PSTN Provider | UDP | SBC Internal IP Address | 40000-49999 | PSTN Provider IP/s | Any | Media |
+| Integration with SIP Provider US | SIP Provider US → SBC | UDP/TCP | SIP Provider US IP/s | Any | US Proxy SBC Internal IP Address | 5060, 5061 | SIP Signalling |
+| | SBC → SIP Provider US | UDP/TCP | US Proxy SBC Internal IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling |
+| | SIP Provider US → SBC | UDP | SIP Provider US IP/s | Any | US Proxy SBC Internal IP Address | 40000-49999 | Media |
+| | SBC → SIP Provider US | UDP | US Proxy SBC Internal IP Address | 40000-49999 | SIP Provider US IP/s | Any | Media |
 
 #### Integration with Downstream SBC
 
@@ -2352,16 +2346,45 @@ Phase 8: Validation
 | Mode | 1+1 Active/Standby |
 | Scope | Within single VPC, across two Availability Zones |
 | Failover Trigger | Health check failure, manual trigger |
-| Failover Mechanism | Stack Manager updates VPC route tables |
+| Failover Mechanism | SBC directly updates VPC route tables via AWS API |
 | Call Handling | Active IP calls maintained; PSTN calls dropped |
 | Virtual IP Range | 169.254.64.0/24 (default, outside VPC CIDR) |
 | Heartbeat Network | Dedicated HA subnet between SBC instances |
 
+> **CRITICAL: SBC IAM Role Required for HA Failover**
+>
+> SBCs **MUST** have an IAM role attached to call AWS APIs during failover. The SBCs directly manipulate VPC route tables to redirect traffic to the newly Active instance. **Without this IAM role, HA failover will NOT work.**
+>
+> **Required IAM Permissions:**
+> - `ec2:CreateRoute` - Create new route table entries for VIP
+> - `ec2:DeleteRoute` - Remove old route table entries
+> - `ec2:ReplaceRoute` - Update existing route table entries
+> - `ec2:DescribeRouteTables` - Query current route table state
+> - `ec2:DescribeNetworkInterfaces` - Query ENI information
+> - `ec2:DescribeInstances` - Query instance information
+>
+> **Network Requirement:** The HA subnet must have connectivity to AWS API endpoints (via NAT Gateway or VPC Endpoint for EC2). Without this connectivity, the SBC cannot call AWS APIs to perform route table updates.
+>
+> See [Section 20: IAM Permissions and Security](#20-iam-permissions-and-security) for the full IAM policy and creation steps.
+
+### Prerequisites for HA Deployment
+
+Before deploying an SBC HA pair, ensure all of the following requirements are met:
+
+- [ ] **IAM Role Created** - SBC IAM role with route table manipulation permissions (see [Section 20](#20-iam-permissions-and-security))
+- [ ] **IAM Role Attached** - Both SBC EC2 instances have the IAM role attached (typically done via Stack Manager during deployment)
+- [ ] **HA Subnet Created** - Dedicated subnet for HA heartbeat communication between SBC instances
+- [ ] **AWS API Connectivity** - HA subnet has outbound connectivity to AWS EC2 API endpoints (via NAT Gateway or VPC Endpoint)
+- [ ] **Two Availability Zones** - SBC instances deployed in separate AZs within the same VPC
+- [ ] **Virtual IP Allocated** - VIP from 169.254.64.0/24 range (must be outside VPC CIDR)
+- [ ] **Route Tables Configured** - VPC route tables prepared for VIP routing
+- [ ] **Stack Manager Deployed** - Required for initial HA cluster deployment (see [Section 21](#21-cyber-security-variation-stack-manager-component))
+
 ### What Happens During SBC Failover
 
 1. **Active SBC fails** (detected via HA subnet heartbeat)
-2. **Stack Manager detects failure** via health monitoring
-3. **Stack Manager calls AWS EC2 API** to update route table
+2. **Standby SBC detects failure** via HA heartbeat timeout
+3. **Standby SBC calls AWS EC2 API** to update route table (requires IAM role)
 4. **Virtual IP route** changed from failed SBC's ENI to standby SBC's ENI
 5. **Elastic IP** (if used) reassigned to standby SBC
 6. **Standby becomes Active** and starts serving traffic
@@ -2380,29 +2403,29 @@ Phase 8: Validation
 
 ### SIP Trunk Connectivity in HA
 
-This section explains how ISP/PSTN providers connect to the HA SBC pair and what happens during failover from their perspective.
+This section explains how regional SIP providers connect to the HA SBC pair and what happens during failover from their perspective. Each region (AU/US) has its own SIP provider for local PSTN breakout.
 
 #### Concept Overview
 
-When configuring SIP trunks with external providers (ISPs, PSTN carriers, or other SBCs), the provider connects to a **single Virtual IP (VIP)** address. The provider is completely unaware of the HA pair behind this address:
+When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU for the Australian Proxy SBC, SIP Provider US for the US Proxy SBC), the provider connects to a **single Virtual IP (VIP)** address. The provider is completely unaware of the HA pair behind this address:
 
-- The ISP/PSTN provider configures their SBC to send SIP traffic to **one IP address only**
+- The regional SIP provider configures their SBC to send SIP traffic to **one IP address only**
 - This IP address is the Virtual IP that "floats" between the Active and Standby SBCs
 - The provider does not need to know about individual SBC instance IPs
 - Failover is transparent to the provider - they never need to reconfigure anything
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        ISP/PSTN Provider Perspective                         │
+│                    Regional SIP Provider Perspective (AU/US)                 │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
 │   ┌──────────────┐         Single IP          ┌─────────────────────────┐   │
-│   │              │         (VIP/EIP)          │                         │   │
-│   │   ISP SBC    │ ─────────────────────────► │   Your HA SBC Pair      │   │
-│   │              │                            │                         │   │
+│   │  Regional    │         (VIP/EIP)          │                         │   │
+│   │  SIP Provider│ ─────────────────────────► │   Your HA SBC Pair      │   │
+│   │   (AU/US)    │                            │                         │   │
 │   └──────────────┘                            └─────────────────────────┘   │
 │                                                                              │
-│   ISP configures:                             Behind the VIP:               │
+│   Provider configures:                        Behind the VIP:               │
 │   • One destination IP                        • SBC #1 (Active)             │
 │   • One destination port (5060/5061)          • SBC #2 (Standby)            │
 │   • One FQDN (optional)                       • Route table magic           │
@@ -2442,14 +2465,14 @@ When configuring SIP trunks with external providers (ISPs, PSTN carriers, or oth
 
 | Traffic Type | Source | Destination IP Type | Failover Mechanism | Provider Action Required |
 |--------------|--------|---------------------|-------------------|-------------------------|
-| **Internal (PSTN via Direct Connect)** | On-premises/DC equipment via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI | None - transparent |
+| **Internal (Regional SIP Provider via Direct Connect)** | Regional SIP Provider (AU/US) via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI | None - transparent |
 | **External (Teams from Internet)** | Microsoft Teams infrastructure from public internet | Elastic IP (public) on External interface | Elastic IP reassigned from failed SBC to Standby SBC | None - transparent |
 
-**Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The ISP/PSTN provider experiences a brief interruption but does not need to take any action.
+**Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The regional SIP provider experiences a brief interruption but does not need to take any action.
 
-#### What to Provide to Your ISP/PSTN Provider
+#### What to Provide to Your Regional SIP Provider
 
-When onboarding a new SIP trunk with an ISP or PSTN provider, provide them with the following information:
+When onboarding a new SIP trunk with a regional SIP provider (SIP Provider AU or SIP Provider US), provide them with the following information:
 
 | Information | Value | Notes |
 |-------------|-------|-------|
@@ -2463,7 +2486,7 @@ When onboarding a new SIP trunk with an ISP or PSTN provider, provide them with 
 
 #### Failover Behavior and Call Impact
 
-Understanding what happens during failover helps set expectations with your ISP/PSTN provider:
+Understanding what happens during failover helps set expectations with your regional SIP provider:
 
 | Scenario | Behavior |
 |----------|----------|
@@ -2471,13 +2494,13 @@ Understanding what happens during failover helps set expectations with your ISP/
 | **Active calls in progress (Teams IP)** | Calls may be **maintained** if using IP-based routing (Teams handles re-INVITE) |
 | **New calls during failover** | Brief interruption (seconds) while route table updates; new calls then succeed |
 | **New calls after failover** | Route seamlessly to the new Active SBC - no difference from caller perspective |
-| **ISP/PSTN provider reconfiguration** | **Not required** - the VIP remains the same, only the underlying SBC changes |
+| **Regional SIP provider reconfiguration** | **Not required** - the VIP remains the same, only the underlying SBC changes |
 
-**Key Point:** Communicate to your ISP/PSTN provider that during rare failover events, there may be a brief interruption lasting a few seconds. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - new calls will automatically route to the new Active SBC.
+**Key Point:** Communicate to your regional SIP provider that during rare failover events, there may be a brief interruption lasting a few seconds. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - new calls will automatically route to the new Active SBC.
 
 #### HA Connectivity Architecture Diagram
 
-The following diagram shows how different entities connect to the HA Proxy SBC pair, distinguishing between external (internet-facing) and internal (private network) connectivity:
+The following diagram shows how different entities connect to the HA Proxy SBC pair, distinguishing between external (internet-facing) and internal (private network) connectivity. Note that each region (Australia/US) has its own Proxy SBC pair with regional SIP provider connectivity for PSTN breakout:
 
 ```
                                     EXTERNAL CONNECTIVITY
@@ -2554,11 +2577,11 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
     │             │                    │                    │                          │
     │             ▼                    ▼                    ▼                          │
     │   ┌───────────────────┐ ┌───────────────────┐ ┌───────────────────┐              │
-    │   │   Downstream      │ │   PSTN Provider   │ │   Cisco Webex     │              │
-    │   │   SBCs            │ │   (Direct Connect)│ │   DI / PBX        │              │
-    │   │                   │ │                   │ │                   │              │
-    │   │   Sites with      │ │   Carrier SBC     │ │   On-prem         │              │
-    │   │   local endpoints │ │   via MPLS/DC     │ │   integrations    │              │
+    │   │   Downstream      │ │  Regional SIP     │ │   3rd Party       │              │
+    │   │   SBCs            │ │  Provider (AU/US) │ │   PBX             │              │
+    │   │                   │ │  (Direct Connect) │ │                   │              │
+    │   │   Sites with      │ │  Local carrier    │ │   On-prem         │              │
+    │   │   local endpoints │ │  via MPLS/DC      │ │   integrations    │              │
     │   └───────────────────┘ └───────────────────┘ └───────────────────┘              │
     │                                                                                  │
     │   All internal entities connect to the SAME Virtual IP (169.254.64.x)           │
@@ -2575,19 +2598,19 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
 | Entity | Location | Connects To | IP Type | Interface | Failover Impact |
 |--------|----------|-------------|---------|-----------|-----------------|
 | Microsoft Teams | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
-| PSTN Provider (Internet) | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
-| PSTN Provider (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| SIP Provider AU (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| SIP Provider US (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
 | Downstream SBCs | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
-| Cisco Webex DI | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
 | 3rd Party PBX | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
 | Registered Endpoints | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
 
 **Key Design Points:**
 
-1. **External entities** (Teams, internet-based PSTN) connect via the **Elastic IP** on the WAN interface
-2. **Internal entities** (downstream SBCs, DC-connected PSTN, PBX) connect via the **Virtual IP** on the LAN interface
-3. **Both IP types "float"** - they move to the Active SBC automatically on failover
-4. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
+1. **External entities** (Teams) connect via the **Elastic IP** on the WAN interface
+2. **Internal entities** (downstream SBCs, regional SIP providers, PBX) connect via the **Virtual IP** on the LAN interface
+3. **Regional SIP Providers:** Each Proxy SBC region has its own SIP provider for local PSTN breakout (SIP Provider AU for Australian Proxy SBC, SIP Provider US for US Proxy SBC)
+4. **Both IP types "float"** - they move to the Active SBC automatically on failover
+5. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
 
 ### Voice Recording Considerations
 
@@ -3255,8 +3278,7 @@ This appendix provides visual representations of all network flows in the AudioC
 │                                       │                          │
 │  Internal Interface (LAN)             │                          │
 │  • Downstream SBCs (UDP 5060)         │                          │
-│  • PSTN Provider (UDP 5060/5061)      │                          │
-│  • Cisco Webex DI (UDP 5060)          │                          │
+│  • Regional SIP Provider (UDP 5060)   │                          │
 │  • 3rd Party PBX (UDP 5060)           │                          │
 │  • Media: UDP 6000-49999              │                          │
 └───────────────┬───────────────────────┘                          │
@@ -3285,13 +3307,13 @@ This appendix provides visual representations of all network flows in the AudioC
     ════════════════════════════════════════════════════════════════════════════════════════
           │                     │                      │                      │
           ▼                     ▼                      ▼                      ▼
-┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
-│ DOWNSTREAM SBC  │   │ DOWNSTREAM SBC  │   │  CISCO WEBEX    │   │  3RD PARTY PBX  │
-│ (Branch Site)   │   │ with LBO        │   │  Dedicated Inst │   │  / Radio System │
-│                 │   │                 │   │                 │   │                 │
-│ • Endpoints     │   │ • Endpoints     │   │                 │   │                 │
-│ • IP Phones     │   │ • Local PSTN ───┼──►│ PSTN Provider   │   │                 │
-└─────────────────┘   └─────────────────┘   └─────────────────┘   └─────────────────┘
+┌─────────────────┐   ┌─────────────────┐   ┌─────────────────┐
+│ DOWNSTREAM SBC  │   │ DOWNSTREAM SBC  │   │  3RD PARTY PBX  │
+│ (Branch Site)   │   │ with LBO        │   │  / Radio System │
+│                 │   │                 │   │                 │
+│ • Endpoints     │   │ • Endpoints     │   │                 │
+│ • IP Phones     │   │ • Local PSTN ───┼──►│ Local PSTN      │
+└─────────────────┘   └─────────────────┘   └─────────────────┘
 ```
 
 ---
@@ -3318,11 +3340,6 @@ This appendix provides visual representations of all network flows in the AudioC
                                                              │                   │
     ┌───────────────────┐                                    │                   │
     │  PSTN PROVIDER    │─────────── UDP 5060 ──────────────►│                   │
-    │                   │◄────────── UDP 5060 ───────────────│                   │
-    └───────────────────┘                                    │                   │
-                                                             │                   │
-    ┌───────────────────┐                                    │                   │
-    │  CISCO WEBEX DI   │─────────── UDP 5060 ──────────────►│                   │
     │                   │◄────────── UDP 5060 ───────────────│                   │
     └───────────────────┘                                    │                   │
                                                              │                   │
@@ -3396,13 +3413,12 @@ This appendix provides visual representations of all network flows in the AudioC
     │   │    Internal_Media_Realm: UDP 6000-9999 (RTP - Unencrypted)                  │   │
     │   │         │                                                                    │   │
     │   │         ├──────────► Downstream SBCs                                        │   │
-    │   │         ├──────────► Cisco Webex DI                                         │   │
     │   │         ├──────────► 3rd Party PBX                                          │   │
     │   │         └──────────► Other Proxy SBC                                        │   │
     │   │                                                                              │   │
     │   │    PSTN_Media_Realm: UDP 40000-49999 (RTP - Unencrypted)                    │   │
     │   │         │                                                                    │   │
-    │   │         └──────────► PSTN Provider                                          │   │
+    │   │         └──────────► Regional SIP Provider (AU/US)                          │   │
     │   │                                                                              │   │
     │   │    LMO_Media_Realm: UDP 30000-39999 (RTP - Local endpoints)                 │   │
     │   │         │                                                                    │   │
@@ -3611,7 +3627,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | LMO Media | Teams Endpoints | SBC | UDP | 30000-39999 | RTP |
 | Internal Media | Downstream SBC | Proxy SBC | UDP | 10000-19999 | RTP |
 | PSTN Media | PSTN Provider | SBC | UDP | 40000-49999 | RTP |
-| Cisco/PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
+| 3rd Party PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
 | **Management** |
 | SNMP Traps | SBC | OVOC | UDP | 162 | None |
 | QoE Reports | SBC | OVOC | TCP | 5001 | TLS |
@@ -3647,6 +3663,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | 1.3 | February 2026 | KS | Added Section 19.1 SIP Trunk Connectivity in HA documenting how PSTN/ISP SIP trunks connect to the HA Proxy SBC pair via Virtual IP; explained failover behavior for external parties; added HA connectivity architecture diagram showing internal vs external entity connections |
 | 1.4 | February 2026 | KS | Updated Appendix D diagrams to clarify bidirectional Graph API traffic: OVOC initiates outbound queries to Microsoft, Microsoft sends inbound webhook notifications to OVOC for call records; added note in quick reference table |
 | 1.5 | February 2026 | KS | Added Voice Recording Considerations subsection to Section 19 documenting SRTP encryption impact on existing voice recorders; covered SIPREC integration option, selective encryption, and decision matrix for recording solutions |
+| 1.6 | February 2026 | KS | Removed Cisco Webex DI references; Added regional SIP providers (SIP Provider AU, SIP Provider US) for PSTN breakout per region; Enhanced SBC IAM role documentation with CRITICAL callout and Prerequisites checklist in Section 19; Updated firewall rules for regional SIP providers |
 
 ---
 
