@@ -3653,6 +3653,553 @@ This appendix provides visual representations of all network flows in the AudioC
 
 ---
 
+### D.8 Comprehensive Interface Mapping - All Appliances
+
+This section provides detailed low-level interface mappings for all AudioCodes appliances in the solution, showing physical ports, ethernet groups, IP interfaces, media realms, and SIP interface bindings.
+
+#### D.8.1 Proxy SBC (AWS) - Complete Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    PROXY SBC (Mediant VE - AWS)                                                  │
+│                                    Instance Type: m5n.large                                                      │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              PHYSICAL/VIRTUAL PORTS (AWS ENI Mapping)                                       │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   GE_1 ─┬─► Ethernet Group 1 ──► Management ENI (eth0)     ──► Management Subnet                           │ │
+│  │   GE_5 ─┘   (OAMP)                Private IP: 10.x.x.x       ──► Admin/OVOC Access                         │ │
+│  │                                                                                                             │ │
+│  │   GE_2 ─┬─► Ethernet Group 2 ──► Internal ENI (eth1)       ──► Internal/LAN Subnet                         │ │
+│  │   GE_6 ─┘   (Media + Control)     Private IP: 10.x.x.x       ──► Downstream SBCs, PSTN, PBX               │ │
+│  │                                                                                                             │ │
+│  │   GE_3 ─┬─► Ethernet Group 3 ──► External ENI (eth2)       ──► DMZ/External Subnet                         │ │
+│  │   GE_7 ─┘   (Media + Control)     Private IP: 10.x.x.x       ──► Microsoft Teams (via EIP)                │ │
+│  │                                   Elastic IP: X.X.X.X        ──► Public-facing for TLS 5061               │ │
+│  │                                                                                                             │ │
+│  │   GE_4 ─┬─► Ethernet Group 4 ──► HA ENI (eth3)             ──► HA Subnet (Dedicated)                       │ │
+│  │   GE_8 ─┘   (Maintenance)         Private IP: 10.x.x.x       ──► HA Heartbeat, AWS API                    │ │
+│  │                                   Virtual IP: 169.254.64.x   ──► Failover routing                         │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    IP INTERFACES                                                            │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Management         │ Type: OAMP            │ Ethernet Device: Group_1 │ IP: X.X.X.X            │ │
+│  │            └──► HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636), NTP                                      │ │
+│  │                                                                                                             │ │
+│  │   Index 1: Internal (LAN)     │ Type: Media+Control   │ Ethernet Device: Group_2 │ IP: X.X.X.X            │ │
+│  │            └──► SIP UDP 5060 (Downstream, PSTN, PBX), RTP 6000-49999                                       │ │
+│  │                                                                                                             │ │
+│  │   Index 2: External (WAN)     │ Type: Media+Control   │ Ethernet Device: Group_3 │ IP: X.X.X.X (DMZ)      │ │
+│  │            └──► SIP TLS 5061 (Teams), SRTP 20000-29999                                                     │ │
+│  │                                                                                                             │ │
+│  │   Index 3: HA                 │ Type: Maintenance     │ Ethernet Device: Group_4 │ IP: X.X.X.X            │ │
+│  │            └──► HA Heartbeat, State Sync, AWS API Calls (for route table updates)                         │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    MEDIA REALMS                                                             │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal_Media_Realm   │ Interface: Internal (LAN) │ Ports: 6000-9999   │ Sessions: 1000       │ │
+│  │            └──► RTP (Unencrypted) to Downstream SBCs, 3rd Party PBX, Other Proxy SBC                      │ │
+│  │                                                                                                             │ │
+│  │   Index 1: M365_Media_Realm       │ Interface: External (WAN) │ Ports: 20000-29999 │ Sessions: 1000       │ │
+│  │            └──► SRTP (Encrypted) to Microsoft Teams                                                        │ │
+│  │                                                                                                             │ │
+│  │   Index 2: PSTN_Media_Realm       │ Interface: Internal (LAN) │ Ports: 40000-49999 │ Sessions: 1000       │ │
+│  │            └──► RTP (Unencrypted) to Regional SIP Provider (AU/US)                                        │ │
+│  │                                                                                                             │ │
+│  │   Index 3: LMO_Media_Realm        │ Interface: Internal (LAN) │ Ports: 30000-39999 │ Sessions: 1000       │ │
+│  │            └──► RTP to Teams Local Media Optimization endpoints                                            │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    SIP INTERFACES                                                           │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal (LAN)     │ Network If: Internal (LAN) │ UDP: 5060 │ Media Realm: Internal_Media_Realm│ │
+│  │            └──► Downstream SBCs, 3rd Party PBX/Radio, Other Proxy SBC                                      │ │
+│  │                                                                                                             │ │
+│  │   Index 1: PSTN               │ Network If: Internal (LAN) │ UDP: 5062 │ Media Realm: PSTN_Media_Realm    │ │
+│  │            └──► SIP Provider AU (AU Proxy) / SIP Provider US (US Proxy)                                    │ │
+│  │                                                                                                             │ │
+│  │   Index 2: External (WAN)     │ Network If: External (WAN) │ TLS: 5061 │ Media Realm: M365_Media_Realm    │ │
+│  │            └──► Microsoft Teams Direct Routing (TLS Context: "Teams")                                      │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    IP GROUPS (TRUNK DEFINITIONS)                                            │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Teams Direct Routing Trunk    │ Proxy Set: Teams DR        │ Media: M365_Media_Realm   │ SRTP Enabled   │ │
+│  │   Downstream SBC Trunk          │ Proxy Set: Downstream SBC  │ Media: Internal_Media_Realm│ RTP           │ │
+│  │   3rd Party PBX Trunk           │ Proxy Set: 3rd Party PBX   │ Media: Internal_Media_Realm│ RTP           │ │
+│  │   SIP Provider AU Trunk         │ Proxy Set: SIP Provider AU │ Media: PSTN_Media_Realm    │ RTP           │ │
+│  │   SIP Provider US Trunk         │ Proxy Set: SIP Provider US │ Media: PSTN_Media_Realm    │ RTP           │ │
+│  │   Proxy-to-Proxy Trunk          │ Proxy Set: Proxy-to-Proxy  │ Media: Internal_Media_Realm│ RTP           │ │
+│  │   User (Registered Endpoints)   │ Proxy Set: --              │ Media: Internal_Media_Realm│ RTP           │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.2 Downstream SBC (On-Premises Mediant 800) - Complete Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    DOWNSTREAM SBC (Mediant 800 - On-Premises)                                    │
+│                                    Physical Appliance                                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              PHYSICAL PORTS (Front Panel)                                                   │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   GE_1 ────► Ethernet Group 1 ──► Management Interface    ──► Management VLAN                              │ │
+│  │              (OAMP)                IP: X.X.X.X               ──► Admin Access, OVOC, LDAP                  │ │
+│  │                                                                                                             │ │
+│  │   GE_2 ────► Ethernet Group 2 ──► Internal (LAN) Interface ──► Internal/Voice VLAN                         │ │
+│  │              (Media + Control)     IP: X.X.X.X               ──► Proxy SBC, Registered Endpoints           │ │
+│  │                                                                                                             │ │
+│  │   GE_3 ────► Ethernet Group 3 ──► HA Interface             ──► HA VLAN (Dedicated)                         │ │
+│  │              (Maintenance)         IP: X.X.X.X               ──► HA Heartbeat, State Sync                  │ │
+│  │                                                                                                             │ │
+│  │   GE_4 ────► (Unused / Spare)                                                                              │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    IP INTERFACES                                                            │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Management         │ Type: OAMP            │ Ethernet Device: Group_1 │ IP: X.X.X.X            │ │
+│  │            └──► HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636) to Domain Controllers                     │ │
+│  │                                                                                                             │ │
+│  │   Index 1: Internal (LAN)     │ Type: Media+Control   │ Ethernet Device: Group_2 │ IP: X.X.X.X            │ │
+│  │            └──► SIP UDP 5060, RTP to Proxy SBC and Registered Endpoints                                    │ │
+│  │                                                                                                             │ │
+│  │   Index 2: HA                 │ Type: Maintenance     │ Ethernet Device: Group_3 │ IP: X.X.X.X            │ │
+│  │            └──► HA Heartbeat and State Synchronization                                                     │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    MEDIA REALMS                                                             │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal_Media_Realm   │ Interface: Internal (LAN) │ Ports: XXXX-XXXX │ Sessions: 1000         │ │
+│  │            └──► RTP (Unencrypted) to Proxy SBC and Registered Endpoints                                    │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    SIP INTERFACES                                                           │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal (LAN)     │ Network If: Internal (LAN) │ UDP: 5060 │ Media Realm: Internal_Media_Realm│ │
+│  │            └──► Proxy SBC Upstream, Registered SIP Endpoints                                               │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    IP GROUPS (TRUNK DEFINITIONS)                                            │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Proxy SBC Trunk               │ Proxy Set: Proxy_SBC      │ Media: Internal_Media_Realm│ RTP            │ │
+│  │   Registered Endpoints          │ Proxy Set: --             │ Media: Internal_Media_Realm│ RTP            │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.3 Downstream SBC with Local Breakout (LBO) - Complete Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              DOWNSTREAM SBC WITH LOCAL BREAKOUT (Mediant 800 - On-Premises)                      │
+│                                    Physical Appliance                                                            │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              PHYSICAL PORTS (Front Panel)                                                   │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   GE_1 ────► Ethernet Group 1 ──► Management Interface    ──► Management VLAN                              │ │
+│  │   GE_2 ────► Ethernet Group 2 ──► Internal (LAN) Interface ──► Internal/Voice VLAN                         │ │
+│  │                                   (Also used for PSTN LBO)    ──► Proxy SBC, Endpoints, Local PSTN         │ │
+│  │   GE_3 ────► Ethernet Group 3 ──► HA Interface             ──► HA VLAN                                     │ │
+│  │   GE_4 ────► (Unused / Spare)                                                                              │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    MEDIA REALMS                                                             │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal_Media_Realm   │ Interface: Internal (LAN) │ Ports: XXXX-XXXX │ Sessions: 1000         │ │
+│  │            └──► RTP to Proxy SBC and Registered Endpoints                                                  │ │
+│  │                                                                                                             │ │
+│  │   Index 1: PSTN_Media_Realm       │ Interface: Internal (LAN) │ Ports: XXXX-XXXX │ Sessions: 1000         │ │
+│  │            └──► RTP to Local PSTN Provider (Local Breakout)                                                │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    SIP INTERFACES                                                           │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Index 0: Internal (LAN)     │ Network If: Internal (LAN) │ UDP: 5060 │ Media Realm: Internal_Media_Realm│ │
+│  │            └──► Proxy SBC Upstream, Registered SIP Endpoints                                               │ │
+│  │                                                                                                             │ │
+│  │   Index 1: PSTN               │ Network If: Internal (LAN) │ UDP: 5062 │ Media Realm: PSTN_Media_Realm    │ │
+│  │            └──► Local PSTN Provider (SIP Trunk for Local Breakout)                                         │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                                    IP GROUPS (TRUNK DEFINITIONS)                                            │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   Proxy SBC Trunk               │ Proxy Set: Proxy_SBC      │ Media: Internal_Media_Realm│ RTP            │ │
+│  │   Registered Endpoints          │ Proxy Set: --             │ Media: Internal_Media_Realm│ RTP            │ │
+│  │   PSTN (Telco) Trunk            │ Proxy Set: PSTN (Telco)   │ Media: PSTN_Media_Realm    │ RTP            │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.4 OVOC - Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    OVOC (One Voice Operations Center)                                            │
+│                                    AWS Instance: m5.4xlarge                                                      │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              NETWORK INTERFACE (Single ENI)                                                 │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   eth0 ────► Primary ENI ──► Management/Internal Subnet ──► IP: X.X.X.X                                    │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              INBOUND SERVICES                                                               │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   TCP 443 ◄──── HTTPS Web UI (Admin Access)                                                                │ │
+│  │   TCP 22  ◄──── SSH (Admin Access via Jump Server)                                                         │ │
+│  │   UDP 162 ◄──── SNMP Traps (from SBCs)                                                                     │ │
+│  │   UDP 1161◄──── SNMP Keep-Alive (from SBCs)                                                                │ │
+│  │   TCP 5001◄──── QoE Reports TLS (from SBCs)                                                                │ │
+│  │   TCP 443 ◄──── Device Manager (Endpoints)                                                                 │ │
+│  │   TCP 443 ◄──── Microsoft Graph API Webhooks (from Microsoft 365 - call record notifications)             │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              OUTBOUND SERVICES                                                              │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   TCP 443 ────► SBC Management (HTTPS to all SBCs)                                                         │ │
+│  │   UDP 161 ────► SNMP Queries (to SBCs)                                                                     │ │
+│  │   TCP 443 ────► login.microsoftonline.com (Azure AD Authentication)                                        │ │
+│  │   TCP 443 ────► graph.microsoft.com (Graph API Queries - call records, user info)                         │ │
+│  │   TCP 443 ────► docs.sharefile.com (Device Manager firmware downloads)                                     │ │
+│  │   UDP/TCP 53──► DNS Server                                                                                 │ │
+│  │   UDP 123 ────► NTP Server                                                                                 │ │
+│  │   TCP 636 ────► LDAP Server (LDAPS Authentication)                                                         │ │
+│  │   UDP 514 ────► Syslog Server                                                                              │ │
+│  │   TCP 25  ────► Mail Server (Email Alerts)                                                                 │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              MICROSOFT GRAPH API INTEGRATION (Bidirectional)                               │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   OUTBOUND (OVOC → Microsoft):                                                                             │ │
+│  │     └──► OAuth Token Acquisition (login.microsoftonline.com)                                               │ │
+│  │     └──► CallRecords API Queries (graph.microsoft.com/v1.0/communications/callRecords)                    │ │
+│  │     └──► User Information Queries (graph.microsoft.com/v1.0/users)                                        │ │
+│  │                                                                                                             │ │
+│  │   INBOUND (Microsoft → OVOC):                                                                              │ │
+│  │     └──► Webhook Notifications (Change notifications when new call records available)                     │ │
+│  │     └──► Requires OVOC to be reachable from Microsoft 365 IPs on TCP 443                                  │ │
+│  │     └──► OVOC must have valid PUBLIC CA certificate (not self-signed)                                     │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.5 ARM (AudioCodes Routing Manager) - Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    ARM CONFIGURATOR                                                              │
+│                                    AWS Instance: m4.xlarge                                                       │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              NETWORK INTERFACE (Single ENI)                                                 │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │   eth0 ────► Primary ENI ──► Management/Internal Subnet ──► IP: X.X.X.X                                    │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              SERVICES                                                                       │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   INBOUND:                                                                                                 │ │
+│  │     TCP 443  ◄──── HTTPS Web UI (Admin Access with OAuth)                                                  │ │
+│  │     TCP 22   ◄──── SSH (Admin Access)                                                                      │ │
+│  │     TCP 443  ◄──── REST API (Service-to-Service Auth)                                                      │ │
+│  │     TCP 443  ◄──── ARM Router Registration                                                                 │ │
+│  │                                                                                                             │ │
+│  │   OUTBOUND:                                                                                                │ │
+│  │     TCP 443  ────► SBC Configuration Push (HTTPS to all SBCs)                                              │ │
+│  │     TCP 443  ────► ARM Router Communication                                                                │ │
+│  │     TCP 443  ────► login.microsoftonline.com (OAuth)                                                       │ │
+│  │     TCP 443  ────► graph.microsoft.com (User/Group info for RBAC)                                          │ │
+│  │     TCP 636  ────► LDAP Server (if using LDAP authentication)                                              │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    ARM ROUTER (One per Region)                                                   │
+│                                    AWS Instance: m4.large                                                        │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              NETWORK INTERFACE (Single ENI)                                                 │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │   eth0 ────► Primary ENI ──► Management/Internal Subnet ──► IP: X.X.X.X                                    │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              SERVICES                                                                       │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   INBOUND:                                                                                                 │ │
+│  │     TCP 443  ◄──── SBC Routing Queries (Real-time routing decisions)                                       │ │
+│  │     TCP 22   ◄──── SSH (Admin Access)                                                                      │ │
+│  │     TCP 443  ◄──── ARM Configurator Sync                                                                   │ │
+│  │                                                                                                             │ │
+│  │   OUTBOUND:                                                                                                │ │
+│  │     TCP 443  ────► ARM Configurator (Policy sync, registration)                                            │ │
+│  │     TCP 443  ────► SBC Query Response                                                                      │ │
+│  │     TCP 6379 ────► Other ARM Routers (if clustered - Redis)                                                │ │
+│  │     TCP 8080 ────► Inter-Router Communication                                                              │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.6 Stack Manager - Interface Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                                    STACK MANAGER                                                                 │
+│                                    AWS Instance: t3.medium                                                       │
+├─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              NETWORK INTERFACE (Single ENI)                                                 │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │   eth0 ────► Primary ENI ──► Management Subnet ──► IP: X.X.X.X (Private, NAT Gateway for egress)           │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              SERVICES                                                                       │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   INBOUND:                                                                                                 │ │
+│  │     TCP 443  ◄──── HTTPS Web UI (Admin Access)                                                             │ │
+│  │     TCP 22   ◄──── SSH (Admin Access via Jump Server)                                                      │ │
+│  │                                                                                                             │ │
+│  │   OUTBOUND (AWS API Access via NAT Gateway):                                                               │ │
+│  │     TCP 443  ────► AWS EC2 API (ec2.amazonaws.com)                                                         │ │
+│  │     TCP 443  ────► AWS CloudFormation API (cloudformation.amazonaws.com)                                   │ │
+│  │     TCP 443  ────► AWS IAM API (iam.amazonaws.com)                                                         │ │
+│  │     TCP 443  ────► AWS ELB API (elasticloadbalancing.amazonaws.com) - if using NLB                        │ │
+│  │     All     ────► VPC CIDR (Communication with SBC instances during deployment)                           │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+│  ┌────────────────────────────────────────────────────────────────────────────────────────────────────────────┐ │
+│  │                              IAM ROLE PERMISSIONS                                                           │ │
+│  ├────────────────────────────────────────────────────────────────────────────────────────────────────────────┤ │
+│  │                                                                                                             │ │
+│  │   ec2:*                      ──► Create/modify EC2 instances, ENIs, security groups, route tables          │ │
+│  │   cloudformation:*           ──► Create and manage CloudFormation stacks                                   │ │
+│  │   cloudwatch:PutMetricAlarm  ──► Configure monitoring alarms                                               │ │
+│  │   cloudwatch:DeleteAlarms    ──► Remove old alarms                                                         │ │
+│  │   iam:PassRole               ──► Assign IAM roles to SBC instances                                         │ │
+│  │   iam:ListInstanceProfiles   ──► Enumerate available instance profiles                                     │ │
+│  │   iam:CreateServiceLinkedRole──► Create service-linked roles for ELB                                       │ │
+│  │                                                                                                             │ │
+│  │   ** Does NOT participate in active HA failover - SBCs call AWS APIs directly **                           │ │
+│  │                                                                                                             │ │
+│  └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                                                                                                                  │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.7 Complete Solution - End-to-End Connectivity Map
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│                              COMPLETE SOLUTION - END-TO-END CONNECTIVITY                                         │
+└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+                                         INTERNET / CLOUD
+    ╔═══════════════════════════════════════════════════════════════════════════════════════════════════════════╗
+    ║                                                                                                            ║
+    ║   ┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐                              ║
+    ║   │  MICROSOFT TEAMS   │    │   MICROSOFT 365    │    │  SIP PROVIDER AU   │                              ║
+    ║   │  Direct Routing    │    │   Graph API        │    │  (Australian PSTN) │                              ║
+    ║   │                    │    │                    │    │                    │                              ║
+    ║   │  52.112.0.0/14     │    │ graph.microsoft.com│    │  Carrier IPs       │                              ║
+    ║   │  52.120.0.0/14     │    │ login.microsoft... │    │                    │                              ║
+    ║   │  52.122.0.0/15     │    │                    │    │                    │                              ║
+    ║   └─────────┬──────────┘    └─────────┬──────────┘    └─────────┬──────────┘                              ║
+    ║             │                         │                         │                                          ║
+    ║             │ TLS 5061                │ HTTPS 443               │ UDP 5060                                 ║
+    ║             │ UDP 3478-3481           │ (Bidirectional)         │ UDP (Media)                              ║
+    ║             │ UDP 49152-53247         │                         │                                          ║
+    ║             │                         │                         │                                          ║
+    ╚═════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════╝
+                  │                         │                         │
+    ══════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════════
+                  │                  AWS VPC (AUSTRALIA REGION)       │
+    ══════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════════
+                  │                         │                         │
+                  ▼                         │                         │
+    ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                              AU PROXY SBC (HA PAIR)                                                          │
+    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
+    │  │      ACTIVE         │◄──►│      STANDBY        │   HA Subnet: 169.254.64.x (Virtual IP)                  │
+    │  │      (AZ-A)         │    │      (AZ-B)         │                                                         │
+    │  └─────────────────────┘    └─────────────────────┘                                                         │
+    │                                                                                                              │
+    │  Interfaces:                                                                                                 │
+    │    • External (WAN): TLS 5061 to Teams, SRTP 20000-29999                                                    │
+    │    • Internal (LAN): UDP 5060 to Downstream/PSTN, RTP 6000-49999  ◄──────────────────────────────────────┐  │
+    │    • Management: HTTPS 443, SSH 22, SNMP, LDAPS 636                                                      │  │
+    │    • HA: Heartbeat, AWS API (route table updates)                                                        │  │
+    │                                                                                                          │  │
+    │  IP Groups: Teams DR, Downstream SBC, SIP Provider AU, 3rd Party PBX, Proxy-to-Proxy                     │  │
+    └───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┘
+                  │                         │                                                                   │
+                  │                         │                                                                   │
+    ┌─────────────┼─────────────────────────┼───────────────────────────────────────────────────────────────────┼──┐
+    │             │    MANAGEMENT ZONE      │                                                                   │  │
+    │             │                         ▼                                                                   │  │
+    │  ┌──────────┴────────────┐  ┌─────────────────────┐  ┌─────────────────────┐  ┌────────────────────────┐ │  │
+    │  │    STACK MANAGER      │  │        OVOC         │  │   ARM CONFIGURATOR  │  │     ARM ROUTER (AU)    │ │  │
+    │  │    t3.medium          │  │     m5.4xlarge      │  │      m4.xlarge      │  │       m4.large         │ │  │
+    │  │                       │  │                     │  │                     │  │                        │ │  │
+    │  │  • HTTPS 443 (Admin)  │  │  • HTTPS 443 (UI)   │  │  • HTTPS 443 (UI)   │  │  • HTTPS 443 (Query)   │ │  │
+    │  │  • SSH 22             │  │  • SSH 22           │  │  • SSH 22           │  │  • SSH 22              │ │  │
+    │  │  • AWS APIs (outbound)│  │  • SNMP 162 (traps) │  │  • REST API 443     │  │  • Config sync         │ │  │
+    │  │                       │  │  • QoE TCP 5001     │  │                     │  │                        │ │  │
+    │  │  IAM Role:            │  │  • Graph API 443 ◄──┼──┤  • OAuth 443        │  │  • ARM Cfg sync 443    │ │  │
+    │  │  ec2:*, cfn:*, iam:*  │  │    (bidirectional)  │  │  • SBC push 443     │  │  • SBC queries 443     │ │  │
+    │  └───────────────────────┘  └─────────────────────┘  └─────────────────────┘  └────────────────────────┘ │  │
+    │                                                                                                           │  │
+    └───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┘
+                                                                                                                │
+    ════════════════════════════════════════════════════════════════════════════════════════════════════════════╪══
+                                     AWS DIRECT CONNECT / VPN                                                   │
+    ════════════════════════════════════════════════════════════════════════════════════════════════════════════╪══
+                                                                                                                │
+    ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┐
+    │                              ON-PREMISES DATA CENTER                                                      │  │
+    │                                                                                                           │  │
+    │  ┌─────────────────────────────┐    ┌─────────────────────────────┐    ┌────────────────────────────────┐│  │
+    │  │      DOWNSTREAM SBC         │    │   DOWNSTREAM SBC (LBO)      │    │      3RD PARTY SYSTEMS         ││  │
+    │  │      (Branch Sites)         │    │   (Sites with Local PSTN)   │    │                                ││  │
+    │  │      Mediant 800            │    │   Mediant 800               │    │  • Legacy PBX                  ││  │
+    │  │                             │    │                             │    │  • Radio/Emergency Systems     ││  │
+    │  │  GE_1: Management           │    │  GE_1: Management           │    │  • Analog Gateways             ││  │
+    │  │  GE_2: Internal (LAN)  ─────┼────┼── GE_2: Internal (LAN) ─────┼────┼───────────────────────────────►│◄─┘
+    │  │  GE_3: HA                   │    │  GE_3: HA                   │    │                                │
+    │  │                             │    │  └──► Local PSTN Trunk      │    │  UDP 5060 (SIP)                │
+    │  │  IP Groups:                 │    │       (SIP Provider)        │    │  UDP (RTP Media)               │
+    │  │  • Proxy SBC Trunk          │    │                             │    │                                │
+    │  │  • Registered Endpoints     │    │  IP Groups:                 │    └────────────────────────────────┘
+    │  │                             │    │  • Proxy SBC Trunk          │
+    │  │  Auth: On-prem AD (LDAPS)   │    │  • Registered Endpoints     │    ┌────────────────────────────────┐
+    │  │                             │    │  • PSTN (Telco) Trunk       │    │    ACTIVE DIRECTORY            │
+    │  └──────────────┬──────────────┘    │                             │    │    Domain Controllers          │
+    │                 │                   │  Auth: On-prem AD (LDAPS)   │    │                                │
+    │                 │                   └──────────────┬──────────────┘    │  LDAPS TCP 636 ◄───────────────┤
+    │                 │                                  │                   │  (SBC Authentication)          │
+    │                 ▼                                  ▼                   │                                │
+    │  ┌─────────────────────────────────────────────────────────────────┐   └────────────────────────────────┘
+    │  │                    REGISTERED ENDPOINTS                          │
+    │  │                                                                  │
+    │  │  • IP Phones (AudioCodes, Poly, Yealink)  • SIP Soft Clients    │
+    │  │  • Conference Room Devices                • Analog via ATA      │
+    │  │                                                                  │
+    │  │  UDP 5060-5069 (SIP Registration/Signaling)                     │
+    │  │  UDP RTP Ports (Media)                                          │
+    │  └──────────────────────────────────────────────────────────────────┘
+    │                                                                                                              │
+    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+
+
+                                 US REGION (Similar Architecture)
+    ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+    │                              US PROXY SBC (HA PAIR) - us-east-1                                              │
+    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
+    │  │      ACTIVE         │◄──►│      STANDBY        │                                                         │
+    │  │      (AZ-A)         │    │      (AZ-B)         │                                                         │
+    │  └─────────────────────┘    └─────────────────────┘                                                         │
+    │                                                                                                              │
+    │  Unique Connectivity:                                                                                        │
+    │    • SIP Provider US (US PSTN Carrier) - UDP 5060/5061                                                      │
+    │    • Proxy-to-Proxy Trunk (to AU Proxy SBC) - UDP/TCP 5060                                                  │
+    │                                                                                                              │
+    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
+    │  │    STACK MANAGER    │    │    ARM ROUTER (US)  │                                                         │
+    │  │      t3.medium      │    │       m4.large      │                                                         │
+    │  └─────────────────────┘    └─────────────────────┘                                                         │
+    │                                                                                                              │
+    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+#### D.8.8 Interface Summary Matrix
+
+| Appliance | Physical Ports | Ethernet Groups | IP Interfaces | Media Realms | SIP Interfaces | External Connectivity |
+|-----------|---------------|-----------------|---------------|--------------|----------------|----------------------|
+| **Proxy SBC (AWS)** | GE_1-GE_8 (Virtual) | 4 (Mgmt, Internal, External, HA) | 4 (OAMP, LAN, WAN, HA) | 4 (Internal, M365, PSTN, LMO) | 3 (Internal, PSTN, External) | Teams, SIP Provider AU/US, Downstream SBCs |
+| **Downstream SBC** | GE_1-GE_4 | 3 (Mgmt, Internal, HA) | 3 (OAMP, LAN, HA) | 1 (Internal) | 1 (Internal) | Proxy SBC, Registered Endpoints |
+| **Downstream SBC (LBO)** | GE_1-GE_4 | 3 (Mgmt, Internal, HA) | 3 (OAMP, LAN, HA) | 2 (Internal, PSTN) | 2 (Internal, PSTN) | Proxy SBC, Registered Endpoints, Local PSTN |
+| **OVOC** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, Microsoft Graph API, Endpoints |
+| **ARM Configurator** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, ARM Routers, Microsoft Graph |
+| **ARM Router** | eth0 (ENI) | 1 | 1 | N/A | N/A | ARM Configurator, SBCs |
+| **Stack Manager** | eth0 (ENI) | 1 | 1 | N/A | N/A | AWS APIs, SBCs (during deployment) |
+
+---
+
 ## Document Control
 
 | Version | Date | Author | Changes |
@@ -3664,6 +4211,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | 1.4 | February 2026 | KS | Updated Appendix D diagrams to clarify bidirectional Graph API traffic: OVOC initiates outbound queries to Microsoft, Microsoft sends inbound webhook notifications to OVOC for call records; added note in quick reference table |
 | 1.5 | February 2026 | KS | Added Voice Recording Considerations subsection to Section 19 documenting SRTP encryption impact on existing voice recorders; covered SIPREC integration option, selective encryption, and decision matrix for recording solutions |
 | 1.6 | February 2026 | KS | Removed Cisco Webex DI references; Added regional SIP providers (SIP Provider AU, SIP Provider US) for PSTN breakout per region; Enhanced SBC IAM role documentation with CRITICAL callout and Prerequisites checklist in Section 19; Updated firewall rules for regional SIP providers |
+| 1.7 | February 2026 | KS | Added comprehensive interface mapping diagrams (Appendix D.8) showing all physical ports, ethernet groups, IP interfaces, media realms, SIP interfaces, and IP groups for all appliances: Proxy SBC (AWS), Downstream SBC, Downstream SBC with LBO, OVOC, ARM Configurator, ARM Router, and Stack Manager; Added end-to-end connectivity map showing complete solution architecture across AU and US regions |
 
 ---
 
