@@ -4061,88 +4061,116 @@ This section provides detailed low-level interface mappings for all AudioCodes a
 
 ```mermaid
 %%{init: {'theme': 'default'}}%%
-%% D.8.7 Complete Solution - End-to-End Connectivity
-%% AudioCodes SBC Architecture
+%% D.8.7 Complete Solution - End-to-End Connectivity with Interface Routing
+%% Shows WAN/LAN interface routing and AWS VPC Route Table mechanism
 
-flowchart LR
-    %% Microsoft Cloud (Left side)
-    subgraph MSCloud["☁️ Microsoft Cloud"]
-        direction TB
-        Teams["Microsoft Teams<br/>Direct Routing"]
+flowchart TB
+    %% === EXTERNAL ZONE (Top) ===
+    subgraph ExtZone["☁️ External Zone (Internet)"]
+        Teams["Microsoft Teams<br/>Direct Routing<br/>52.112.0.0/14"]
         M365["Microsoft 365<br/>Graph API"]
     end
 
-    %% AWS Regions (Center)
-    subgraph AWS["🔶 AWS Infrastructure"]
-        direction TB
-        subgraph AUVPC["Australia Region"]
-            subgraph AUProxy["AU Proxy SBC HA"]
-                AUActive["Active"]
-                AUStandby["Standby"]
-            end
-            AUMgmt["Stack Mgr | OVOC | ARM"]
+    %% === AWS VPC INFRASTRUCTURE ===
+    subgraph AWSVPC["🔶 AWS VPC - Australia (ap-southeast-2)"]
+
+        %% Public Subnet with Elastic IP
+        subgraph PubSubnet["External/WAN Subnet (Public)"]
+            EIP["Elastic IP<br/>(Public Address)"]
+            WANInt["eth2 - WAN Interface<br/>TLS 5061 | SRTP 20000-29999"]
         end
 
-        subgraph USVPC["US Region"]
-            subgraph USProxy["US Proxy SBC HA"]
-                USActive["Active"]
-                USStandby["Standby"]
+        %% SBC HA Pair
+        subgraph ProxySBC["Proxy SBC HA Pair"]
+            subgraph ActiveSBC["🟢 Active SBC (AZ-A)"]
+                ActiveCore["SBC Core<br/>Call Processing"]
             end
-            USMgmt["Stack Mgr | ARM Router"]
+            subgraph StandbySBC["🔵 Standby SBC (AZ-B)"]
+                StandbyCore["SBC Core<br/>(Hot Standby)"]
+            end
+        end
+
+        %% HA Subnet with VIP
+        subgraph HASubnet["HA Subnet (Private)"]
+            HAInt["eth3 - HA Interface<br/>Heartbeat & State Sync"]
+            VIP["Virtual IP<br/>169.254.64.x"]
+        end
+
+        %% AWS Route Table
+        subgraph RouteTable["📋 AWS VPC Route Table"]
+            RT["Route: 169.254.64.x/32<br/>Target: Active SBC ENI<br/>(Updated by SBC on failover)"]
+        end
+
+        %% Internal/LAN Subnet
+        subgraph IntSubnet["Internal/LAN Subnet (Private)"]
+            LANInt["eth1 - LAN Interface<br/>UDP 5060 | RTP 6000-49999"]
+        end
+
+        %% Management Subnet
+        subgraph MgmtSubnet["Management Subnet"]
+            MgmtInt["eth0 - OAMP Interface"]
+            OVOC["OVOC"]
+            StackMgr["Stack Manager"]
+            ARM["ARM"]
         end
     end
 
-    %% SIP Providers (Right side - separate from Microsoft)
+    %% === SIP PROVIDERS (via LAN interface) ===
     subgraph PSTN["📞 PSTN Carriers"]
-        direction TB
         SIPAU["SIP Provider AU"]
-        SIPUS["SIP Provider US"]
     end
 
-    %% On-Premises (Bottom)
+    %% === ON-PREMISES (via Direct Connect) ===
     subgraph OnPrem["🏢 On-Premises"]
-        direction LR
-        DSSBC["Downstream SBC"]
-        DSLBO["Downstream SBC + LBO"]
-        PBX["3rd Party PBX"]
-        AD["Active Directory"]
+        DSSBC["Downstream SBCs"]
         Endpoints["IP Phones / Softphones"]
     end
 
-    %% Microsoft Connections (Bidirectional)
-    Teams <-->|"TLS 5061"| AUActive
-    M365 <-->|"HTTPS 443"| AUMgmt
+    %% === CONNECTION FLOWS ===
 
-    %% SIP Provider Connections (Outbound only - SBC initiates)
-    AUActive -->|"UDP 5060"| SIPAU
-    USActive -->|"UDP 5060"| SIPUS
+    %% External Traffic Flow (Teams → WAN → SBC Core)
+    Teams <-->|"TLS 5061<br/>SRTP"| EIP
+    EIP --- WANInt
+    WANInt -->|"Inbound"| ActiveCore
+    ActiveCore -->|"Outbound"| WANInt
 
-    %% HA Connections
-    AUActive <--> AUStandby
-    USActive <--> USStandby
-
-    %% Cross-Region
-    AUActive <-->|"Proxy-to-Proxy"| USActive
-
-    %% On-Prem Connections
-    AUActive <-->|"UDP 5060"| DSSBC
-    AUActive <-->|"UDP 5060"| DSLBO
-    AUActive <-->|"UDP 5060"| PBX
-    DSSBC <-->|"LDAPS"| AD
+    %% Internal Traffic Flow (SBC Core → LAN → On-Prem)
+    ActiveCore -->|"Internal"| LANInt
+    LANInt <-->|"UDP 5060<br/>RTP"| DSSBC
+    LANInt -->|"Outbound Only"| SIPAU
     DSSBC --> Endpoints
-    DSLBO --> Endpoints
 
-    %% Styling
-    classDef mscloud fill:#0078d4,stroke:#005a9e,color:#fff
+    %% HA & Failover Mechanism
+    ActiveCore <-->|"State Sync"| HAInt
+    StandbyCore <-->|"Heartbeat"| HAInt
+    HAInt --- VIP
+    VIP ---|"Points to<br/>Active ENI"| RT
+    ActiveCore -.->|"On Failover:<br/>AWS EC2 API Call"| RT
+
+    %% Management Connections
+    M365 <-->|"HTTPS 443"| OVOC
+    MgmtInt --- ActiveCore
+    OVOC -->|"SNMP/QoE"| MgmtInt
+    StackMgr -->|"Deploy"| MgmtInt
+
+    %% === STYLING ===
+    classDef external fill:#1a73e8,stroke:#0d47a1,color:#fff
     classDef aws fill:#ff9900,stroke:#cc7a00,color:#000
     classDef sbc fill:#34a853,stroke:#1e7e34,color:#fff
+    classDef interface fill:#ffeb3b,stroke:#f57f17,color:#000
+    classDef ha fill:#4caf50,stroke:#2e7d32,color:#fff
+    classDef route fill:#9c27b0,stroke:#6a1b9a,color:#fff
     classDef pstn fill:#e91e63,stroke:#c2185b,color:#fff
     classDef onprem fill:#616161,stroke:#424242,color:#fff
+    classDef mgmt fill:#7b1fa2,stroke:#4a148c,color:#fff
 
-    class Teams,M365 mscloud
-    class AUActive,AUStandby,USActive,USStandby sbc
-    class SIPAU,SIPUS pstn
-    class DSSBC,DSLBO,PBX,AD,Endpoints onprem
+    class Teams,M365 external
+    class EIP,WANInt,LANInt,MgmtInt,HAInt interface
+    class ActiveCore,StandbyCore sbc
+    class VIP,RT route
+    class SIPAU pstn
+    class DSSBC,Endpoints onprem
+    class OVOC,StackMgr,ARM mgmt
 ```
 
 #### D.8.8 Interface Summary Matrix
