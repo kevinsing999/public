@@ -4059,119 +4059,209 @@ This section provides detailed low-level interface mappings for all AudioCodes a
 
 #### D.8.7 Complete Solution - End-to-End Connectivity Map
 
+**How Traffic Flows Through the SBC**
+
+The diagram below shows the SBC as a "gateway" device. Think of it like a security checkpoint at an airport - calls enter on one side, get inspected and processed, then exit on the other side to reach their destination.
+
 ```mermaid
 %%{init: {'theme': 'default'}}%%
-%% D.8.7 Complete Solution - End-to-End Connectivity with Interface Routing
-%% Shows WAN/LAN interface routing and AWS VPC Route Table mechanism
+%% D.8.7 - Layman-Friendly View: SBC as a Gateway Device
+%% Traffic flows LEFT to RIGHT: External → SBC → Internal
+
+flowchart LR
+    %% === EXTERNAL WORLD (Left Side - Untrusted) ===
+    subgraph External["☁️ EXTERNAL (Internet)"]
+        direction TB
+        Teams["Microsoft<br/>Teams"]
+        SIPProvider["SIP Carrier<br/>(Phone Company)"]
+    end
+
+    %% === THE SBC DEVICE (Center - The Gateway) ===
+    subgraph SBC["🔶 PROXY SBC - The Gateway"]
+        direction TB
+
+        subgraph Ports["Network Ports"]
+            direction LR
+            WAN["🔴 WAN Port<br/>eth2<br/>External Side"]
+            LAN["🟢 LAN Port<br/>eth1<br/>Internal Side"]
+        end
+
+        subgraph Core["Call Processing Engine"]
+            direction TB
+            Process["Inspect & Route Calls<br/>• Validate caller<br/>• Apply policies<br/>• Convert protocols"]
+        end
+
+        subgraph HAPort["HA Port"]
+            HA["🔵 eth3<br/>Sync to Standby"]
+        end
+    end
+
+    %% === STANDBY SBC (Backup) ===
+    subgraph Standby["🔵 STANDBY SBC"]
+        Backup["Ready to<br/>Take Over"]
+    end
+
+    %% === INTERNAL NETWORK (Right Side - Trusted) ===
+    subgraph Internal["🏢 INTERNAL (Your Network)"]
+        direction TB
+        Downstream["Branch<br/>SBCs"]
+        Phones["IP Phones &<br/>Softphones"]
+    end
+
+    %% === TRAFFIC FLOWS ===
+
+    %% External to SBC (enters WAN port)
+    Teams <-->|"Encrypted<br/>Voice"| WAN
+    SIPProvider <---|"SBC Registers<br/>Outbound"| WAN
+
+    %% Through the SBC (WAN → Processing → LAN)
+    WAN -->|"IN"| Process
+    Process -->|"OUT"| LAN
+
+    %% SBC to Internal (exits LAN port)
+    LAN <-->|"Voice<br/>Traffic"| Downstream
+    Downstream --> Phones
+
+    %% HA Sync
+    HA <-.->|"Keep in Sync"| Backup
+
+    %% === STYLING ===
+    classDef external fill:#ef5350,stroke:#c62828,color:#fff
+    classDef sbc fill:#ff9800,stroke:#e65100,color:#000
+    classDef internal fill:#4caf50,stroke:#2e7d32,color:#fff
+    classDef wan fill:#ef5350,stroke:#c62828,color:#fff
+    classDef lan fill:#4caf50,stroke:#2e7d32,color:#fff
+    classDef ha fill:#2196f3,stroke:#1565c0,color:#fff
+    classDef process fill:#fff3e0,stroke:#ff9800,color:#000
+
+    class Teams,SIPProvider external
+    class WAN wan
+    class LAN lan
+    class HA,Backup ha
+    class Process process
+    class Downstream,Phones internal
+```
+
+**Key Concepts:**
+- **WAN Port (eth2)** - Faces the internet. This is where Microsoft Teams and phone carriers connect.
+- **LAN Port (eth1)** - Faces your internal network. This is where your office phones and branch sites connect.
+- **Call Processing** - Every call passes through the engine which validates, secures, and routes it.
+- **Standby SBC** - An identical backup that takes over instantly if the primary fails.
+
+---
+
+**Detailed Technical View: AWS Infrastructure & HA Failover**
+
+```mermaid
+%%{init: {'theme': 'default'}}%%
+%% D.8.7 - Technical View: AWS Subnets and HA Mechanism
 
 flowchart TB
-    %% === EXTERNAL ZONE (Top) ===
-    subgraph ExtZone["☁️ External Zone (Internet)"]
-        Teams["Microsoft Teams<br/>Direct Routing<br/>52.112.0.0/14"]
+    %% === CLOUD SERVICES ===
+    subgraph Cloud["☁️ Cloud Services"]
+        direction LR
+        Teams["Microsoft Teams<br/>Direct Routing"]
         M365["Microsoft 365<br/>Graph API"]
     end
 
-    %% === AWS VPC INFRASTRUCTURE ===
-    subgraph AWSVPC["🔶 AWS VPC - Australia (ap-southeast-2)"]
+    %% === AWS VPC ===
+    subgraph AWS["🔶 AWS VPC"]
+        direction TB
 
-        %% Public Subnet with Elastic IP
-        subgraph PubSubnet["External/WAN Subnet (Public)"]
+        %% WAN Subnet
+        subgraph WANSubnet["WAN Subnet (Public)"]
             EIP["Elastic IP<br/>(Public Address)"]
-            WANInt["eth2 - WAN Interface<br/>TLS 5061 | SRTP 20000-29999"]
         end
 
-        %% SBC HA Pair
-        subgraph ProxySBC["Proxy SBC HA Pair"]
-            subgraph ActiveSBC["🟢 Active SBC (AZ-A)"]
-                ActiveCore["SBC Core<br/>Call Processing"]
+        %% The two SBCs
+        subgraph HAPair["HA Pair"]
+            direction LR
+            subgraph Active["🟢 Active SBC"]
+                A_WAN["eth2<br/>WAN"]
+                A_Core["Core"]
+                A_LAN["eth1<br/>LAN"]
+                A_HA["eth3"]
             end
-            subgraph StandbySBC["🔵 Standby SBC (AZ-B)"]
-                StandbyCore["SBC Core<br/>(Hot Standby)"]
+            subgraph Stand["🔵 Standby SBC"]
+                S_WAN["eth2"]
+                S_Core["Core"]
+                S_LAN["eth1"]
+                S_HA["eth3"]
             end
         end
 
-        %% HA Subnet with VIP
-        subgraph HASubnet["HA Subnet (Private)"]
-            HAInt["eth3 - HA Interface<br/>Heartbeat & State Sync"]
+        %% HA Mechanism
+        subgraph HAMech["HA Failover Mechanism"]
             VIP["Virtual IP<br/>169.254.64.x"]
+            RT["AWS Route Table<br/>VIP → Active ENI"]
         end
 
-        %% AWS Route Table
-        subgraph RouteTable["📋 AWS VPC Route Table"]
-            RT["Route: 169.254.64.x/32<br/>Target: Active SBC ENI<br/>(Updated by SBC on failover)"]
+        %% LAN Subnet
+        subgraph LANSubnet["LAN Subnet (Private)"]
+            LANgw["Gateway to<br/>On-Premises"]
         end
 
-        %% Internal/LAN Subnet
-        subgraph IntSubnet["Internal/LAN Subnet (Private)"]
-            LANInt["eth1 - LAN Interface<br/>UDP 5060 | RTP 6000-49999"]
-        end
-
-        %% Management Subnet
-        subgraph MgmtSubnet["Management Subnet"]
-            MgmtInt["eth0 - OAMP Interface"]
+        %% Management
+        subgraph Mgmt["Management"]
             OVOC["OVOC"]
-            StackMgr["Stack Manager"]
-            ARM["ARM"]
         end
     end
 
-    %% === SIP PROVIDERS (via LAN interface) ===
-    subgraph PSTN["📞 PSTN Carriers"]
-        SIPAU["SIP Provider AU"]
-    end
-
-    %% === ON-PREMISES (via Direct Connect) ===
+    %% === ON-PREM ===
     subgraph OnPrem["🏢 On-Premises"]
-        DSSBC["Downstream SBCs"]
-        Endpoints["IP Phones / Softphones"]
+        DS["Downstream SBCs"]
+        EP["Endpoints"]
     end
 
-    %% === CONNECTION FLOWS ===
+    %% === CONNECTIONS ===
 
-    %% External Traffic Flow (Teams → WAN → SBC Core)
-    Teams <-->|"TLS 5061<br/>SRTP"| EIP
-    EIP --- WANInt
-    WANInt -->|"Inbound"| ActiveCore
-    ActiveCore -->|"Outbound"| WANInt
+    %% Cloud to AWS
+    Teams <-->|"TLS 5061"| EIP
+    M365 <-->|"HTTPS"| OVOC
+    EIP --- A_WAN
 
-    %% Internal Traffic Flow (SBC Core → LAN → On-Prem)
-    ActiveCore -->|"Internal"| LANInt
-    LANInt <-->|"UDP 5060<br/>RTP"| DSSBC
-    LANInt -->|"Outbound Only"| SIPAU
-    DSSBC --> Endpoints
+    %% Through Active SBC
+    A_WAN --- A_Core
+    A_Core --- A_LAN
+    A_LAN --- LANgw
 
-    %% HA & Failover Mechanism
-    ActiveCore <-->|"State Sync"| HAInt
-    StandbyCore <-->|"Heartbeat"| HAInt
-    HAInt --- VIP
-    VIP ---|"Points to<br/>Active ENI"| RT
-    ActiveCore -.->|"On Failover:<br/>AWS EC2 API Call"| RT
+    %% To On-Prem
+    LANgw <--> DS
+    DS --> EP
 
-    %% Management Connections
-    M365 <-->|"HTTPS 443"| OVOC
-    MgmtInt --- ActiveCore
-    OVOC -->|"SNMP/QoE"| MgmtInt
-    StackMgr -->|"Deploy"| MgmtInt
+    %% HA Sync between SBCs
+    A_HA <-->|"Heartbeat"| S_HA
+    A_HA --- VIP
+    S_HA --- VIP
+
+    %% Route Table points to Active
+    VIP ---|"Routes to"| RT
+    RT -.->|"Points to<br/>Active ENI"| A_Core
+
+    %% On failover, Standby calls AWS API
+    S_Core -.->|"On Failover:<br/>Update Route"| RT
 
     %% === STYLING ===
-    classDef external fill:#1a73e8,stroke:#0d47a1,color:#fff
-    classDef aws fill:#ff9900,stroke:#cc7a00,color:#000
-    classDef sbc fill:#34a853,stroke:#1e7e34,color:#fff
-    classDef interface fill:#ffeb3b,stroke:#f57f17,color:#000
-    classDef ha fill:#4caf50,stroke:#2e7d32,color:#fff
-    classDef route fill:#9c27b0,stroke:#6a1b9a,color:#fff
-    classDef pstn fill:#e91e63,stroke:#c2185b,color:#fff
+    classDef cloud fill:#1a73e8,stroke:#0d47a1,color:#fff
+    classDef active fill:#4caf50,stroke:#2e7d32,color:#fff
+    classDef standby fill:#2196f3,stroke:#1565c0,color:#fff
+    classDef ha fill:#9c27b0,stroke:#6a1b9a,color:#fff
+    classDef subnet fill:#fff3e0,stroke:#ff9800,color:#000
     classDef onprem fill:#616161,stroke:#424242,color:#fff
-    classDef mgmt fill:#7b1fa2,stroke:#4a148c,color:#fff
 
-    class Teams,M365 external
-    class EIP,WANInt,LANInt,MgmtInt,HAInt interface
-    class ActiveCore,StandbyCore sbc
-    class VIP,RT route
-    class SIPAU pstn
-    class DSSBC,Endpoints onprem
-    class OVOC,StackMgr,ARM mgmt
+    class Teams,M365 cloud
+    class A_WAN,A_Core,A_LAN,A_HA active
+    class S_WAN,S_Core,S_LAN,S_HA,Stand standby
+    class VIP,RT ha
+    class EIP,LANgw subnet
+    class DS,EP onprem
 ```
+
+**How HA Failover Works:**
+1. Both SBCs share a **Virtual IP (VIP)** address on the HA subnet
+2. The **AWS Route Table** has a route pointing the VIP to the Active SBC's network interface
+3. If the Active SBC fails, the Standby SBC calls the **AWS EC2 API** to update the route table
+4. Traffic now flows to the Standby (which becomes the new Active) - no IP changes needed for external parties
 
 #### D.8.8 Interface Summary Matrix
 
