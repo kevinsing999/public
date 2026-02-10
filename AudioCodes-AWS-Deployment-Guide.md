@@ -4178,13 +4178,13 @@ flowchart TB
             direction LR
             subgraph Active["🟢 Active SBC"]
                 A_WAN["eth2<br/>WAN"]
-                A_Core["Core"]
+                A_Core["Call<br/>Engine"]
                 A_LAN["eth1<br/>LAN"]
                 A_HA["eth3"]
             end
             subgraph Stand["🔵 Standby SBC"]
                 S_WAN["eth2"]
-                S_Core["Core"]
+                S_Core["Call<br/>Engine"]
                 S_LAN["eth1"]
                 S_HA["eth3"]
             end
