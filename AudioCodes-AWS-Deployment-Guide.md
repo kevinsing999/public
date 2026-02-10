@@ -4064,53 +4064,56 @@ This section provides detailed low-level interface mappings for all AudioCodes a
 %% D.8.7 Complete Solution - End-to-End Connectivity
 %% AudioCodes SBC Architecture
 
-flowchart TB
-    %% Internet Layer
-    subgraph Cloud["☁️ Internet / Cloud"]
+flowchart LR
+    %% Microsoft Cloud (Left side)
+    subgraph MSCloud["☁️ Microsoft Cloud"]
+        direction TB
         Teams["Microsoft Teams<br/>Direct Routing"]
         M365["Microsoft 365<br/>Graph API"]
+    end
+
+    %% AWS Regions (Center)
+    subgraph AWS["🔶 AWS Infrastructure"]
+        direction TB
+        subgraph AUVPC["Australia Region"]
+            subgraph AUProxy["AU Proxy SBC HA"]
+                AUActive["Active"]
+                AUStandby["Standby"]
+            end
+            AUMgmt["Stack Mgr | OVOC | ARM"]
+        end
+
+        subgraph USVPC["US Region"]
+            subgraph USProxy["US Proxy SBC HA"]
+                USActive["Active"]
+                USStandby["Standby"]
+            end
+            USMgmt["Stack Mgr | ARM Router"]
+        end
+    end
+
+    %% SIP Providers (Right side - separate from Microsoft)
+    subgraph PSTN["📞 PSTN Carriers"]
+        direction TB
         SIPAU["SIP Provider AU"]
         SIPUS["SIP Provider US"]
     end
 
-    %% Australia VPC
-    subgraph AUVPC["🔶 AWS Australia"]
-        subgraph AUProxy["AU Proxy SBC HA"]
-            AUActive["Active"]
-            AUStandby["Standby"]
-        end
-        subgraph AUMgmt["Management"]
-            StackMgr["Stack Manager"]
-            OVOC["OVOC"]
-            ARM["ARM"]
-        end
-    end
-
-    %% US VPC
-    subgraph USVPC["🔶 AWS US"]
-        subgraph USProxy["US Proxy SBC HA"]
-            USActive["Active"]
-            USStandby["Standby"]
-        end
-        USStack["Stack Manager"]
-        ARMUS["ARM Router"]
-    end
-
-    %% On-Premises
+    %% On-Premises (Bottom)
     subgraph OnPrem["🏢 On-Premises"]
+        direction LR
         DSSBC["Downstream SBC"]
-        DSLBO["Downstream SBC<br/>+ LBO"]
+        DSLBO["Downstream SBC + LBO"]
         PBX["3rd Party PBX"]
         AD["Active Directory"]
-        subgraph EP["Endpoints"]
-            Phones["IP Phones"]
-            Soft["Softphones"]
-        end
+        Endpoints["IP Phones / Softphones"]
     end
 
-    %% Cloud to AWS Connections
+    %% Microsoft Connections (Bidirectional)
     Teams <-->|"TLS 5061"| AUActive
-    M365 <-->|"HTTPS 443"| OVOC
+    M365 <-->|"HTTPS 443"| AUMgmt
+
+    %% SIP Provider Connections (Outbound only - SBC initiates)
     AUActive -->|"UDP 5060"| SIPAU
     USActive -->|"UDP 5060"| SIPUS
 
@@ -4121,38 +4124,25 @@ flowchart TB
     %% Cross-Region
     AUActive <-->|"Proxy-to-Proxy"| USActive
 
-    %% Management
-    StackMgr --> AUActive
-    OVOC --> AUActive
-    ARM --> AUActive
-    USStack --> USActive
-    ARMUS --> USActive
-
-    %% AWS to On-Prem
+    %% On-Prem Connections
     AUActive <-->|"UDP 5060"| DSSBC
     AUActive <-->|"UDP 5060"| DSLBO
     AUActive <-->|"UDP 5060"| PBX
-
-    %% On-Prem Internal
     DSSBC <-->|"LDAPS"| AD
-    DSLBO <-->|"LDAPS"| AD
-    DSSBC --> Phones
-    DSSBC --> Soft
-    DSLBO --> Phones
+    DSSBC --> Endpoints
+    DSLBO --> Endpoints
 
     %% Styling
-    classDef cloud fill:#4285f4,stroke:#1a73e8,color:#fff
+    classDef mscloud fill:#0078d4,stroke:#005a9e,color:#fff
     classDef aws fill:#ff9900,stroke:#cc7a00,color:#000
     classDef sbc fill:#34a853,stroke:#1e7e34,color:#fff
-    classDef mgmt fill:#9c27b0,stroke:#6a1b9a,color:#fff
+    classDef pstn fill:#e91e63,stroke:#c2185b,color:#fff
     classDef onprem fill:#616161,stroke:#424242,color:#fff
-    classDef endpoint fill:#03a9f4,stroke:#0288d1,color:#fff
 
-    class Teams,M365,SIPAU,SIPUS cloud
+    class Teams,M365 mscloud
     class AUActive,AUStandby,USActive,USStandby sbc
-    class StackMgr,OVOC,ARM,USStack,ARMUS mgmt
-    class DSSBC,DSLBO,PBX,AD onprem
-    class Phones,Soft endpoint
+    class SIPAU,SIPUS pstn
+    class DSSBC,DSLBO,PBX,AD,Endpoints onprem
 ```
 
 #### D.8.8 Interface Summary Matrix
