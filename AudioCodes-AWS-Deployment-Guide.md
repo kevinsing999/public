@@ -1895,18 +1895,14 @@ This section details all firewall rules required for the AudioCodes SBC solution
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with SIP Provider AU | SIP Provider AU → SBC | UDP/TCP | SIP Provider AU IP/s | Any | AU Proxy SBC Internal IP Address | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC Internal IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling |
-| | SIP Provider AU → SBC | UDP | SIP Provider AU IP/s | Any | AU Proxy SBC Internal IP Address | 40000-49999 | Media |
+| Integration with SIP Provider AU | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC Internal IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling |
 | | SBC → SIP Provider AU | UDP | AU Proxy SBC Internal IP Address | 40000-49999 | SIP Provider AU IP/s | Any | Media |
 
 #### Integration with SIP Provider US (US Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with SIP Provider US | SIP Provider US → SBC | UDP/TCP | SIP Provider US IP/s | Any | US Proxy SBC Internal IP Address | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider US | UDP/TCP | US Proxy SBC Internal IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling |
-| | SIP Provider US → SBC | UDP | SIP Provider US IP/s | Any | US Proxy SBC Internal IP Address | 40000-49999 | Media |
+| Integration with SIP Provider US | SBC → SIP Provider US | UDP/TCP | US Proxy SBC Internal IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling |
 | | SBC → SIP Provider US | UDP | US Proxy SBC Internal IP Address | 40000-49999 | SIP Provider US IP/s | Any | Media |
 
 #### Integration with Downstream SBC
@@ -2069,9 +2065,7 @@ This section details all firewall rules required for the AudioCodes SBC solution
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| SIP Signalling | Telco Provider → SBC | UDP/TCP | Telco Provider IP/s | Any | SBC IP Address | 5060, 5061 | SIP Signalling |
 | SIP Signalling | SBC → Telco Provider | UDP/TCP | SBC IP Address | Any | Telco Provider IP/s | To be confirmed with Telco | SIP Signalling |
-| Media | Telco Provider → SBC | UDP | Telco Provider IP/s | Any | SBC IP Address | 40000-49999 | Media |
 | Media | SBC → Telco Provider | UDP | SBC IP Address | 40000-49999 | Telco Provider IP/s | Any | Media |
 
 #### Integration with Proxy SBC
@@ -2403,32 +2397,32 @@ Before deploying an SBC HA pair, ensure all of the following requirements are me
 
 ### SIP Trunk Connectivity in HA
 
-This section explains how regional SIP providers connect to the HA SBC pair and what happens during failover from their perspective. Each region (AU/US) has its own SIP provider for local PSTN breakout.
+This section explains how the HA SBC pair connects outbound to regional SIP providers and what happens during failover. Each region (AU/US) has its own SIP provider for local PSTN breakout.
 
 #### Concept Overview
 
-When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU for the Australian Proxy SBC, SIP Provider US for the US Proxy SBC), the provider connects to a **single Virtual IP (VIP)** address. The provider is completely unaware of the HA pair behind this address:
+When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU for the Australian Proxy SBC, SIP Provider US for the US Proxy SBC), the SBC registers with and initiates outbound connections to the provider. The provider sees traffic originating from a **single Virtual IP (VIP)** address:
 
-- The regional SIP provider configures their SBC to send SIP traffic to **one IP address only**
-- This IP address is the Virtual IP that "floats" between the Active and Standby SBCs
-- The provider does not need to know about individual SBC instance IPs
-- Failover is transparent to the provider - they never need to reconfigure anything
+- The enterprise SBC initiates registration and maintains the SIP trunk connection to the provider
+- Outbound SIP traffic from the SBC originates from the Virtual IP that "floats" between the Active and Standby SBCs
+- The provider does not initiate connections to the SBC - the SBC maintains the registration
+- Failover is transparent to the provider - the new Active SBC re-registers and resumes the connection
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                    Regional SIP Provider Perspective (AU/US)                 │
+│                    SBC Outbound Registration (AU/US Regions)                │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │                                                                              │
-│   ┌──────────────┐         Single IP          ┌─────────────────────────┐   │
-│   │  Regional    │         (VIP/EIP)          │                         │   │
-│   │  SIP Provider│ ─────────────────────────► │   Your HA SBC Pair      │   │
-│   │   (AU/US)    │                            │                         │   │
-│   └──────────────┘                            └─────────────────────────┘   │
+│   ┌─────────────────────────┐         Single IP          ┌──────────────┐   │
+│   │                         │         (VIP/EIP)          │  Regional    │   │
+│   │   Your HA SBC Pair      │ ─────────────────────────► │  SIP Provider│   │
+│   │                         │    (Outbound Registration) │   (AU/US)    │   │
+│   └─────────────────────────┘                            └──────────────┘   │
 │                                                                              │
-│   Provider configures:                        Behind the VIP:               │
-│   • One destination IP                        • SBC #1 (Active)             │
-│   • One destination port (5060/5061)          • SBC #2 (Standby)            │
-│   • One FQDN (optional)                       • Route table magic           │
+│   SBC initiates:                              Provider receives:            │
+│   • Registration to provider                  • SIP REGISTER from VIP       │
+│   • Outbound calls via trunk                  • Calls originating from VIP  │
+│   • Maintains connection                      • No inbound connection needed│
 │                                                                              │
 └─────────────────────────────────────────────────────────────────────────────┘
 
@@ -2463,26 +2457,27 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 
 #### Traffic Types and Failover Mechanisms
 
-| Traffic Type | Source | Destination IP Type | Failover Mechanism | Provider Action Required |
-|--------------|--------|---------------------|-------------------|-------------------------|
-| **Internal (Regional SIP Provider via Direct Connect)** | Regional SIP Provider (AU/US) via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI | None - transparent |
+| Traffic Type | Direction | Source IP Type | Failover Mechanism | Provider Action Required |
+|--------------|-----------|----------------|-------------------|-------------------------|
+| **Internal (SBC to Regional SIP Provider via Direct Connect)** | SBC initiates outbound registration and calls to provider via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI; new Active SBC re-registers | None - transparent |
 | **External (Teams from Internet)** | Microsoft Teams infrastructure from public internet | Elastic IP (public) on External interface | Elastic IP reassigned from failed SBC to Standby SBC | None - transparent |
 
 **Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The regional SIP provider experiences a brief interruption but does not need to take any action.
 
-#### What to Provide to Your Regional SIP Provider
+#### Information to Exchange with Your Regional SIP Provider
 
-When onboarding a new SIP trunk with a regional SIP provider (SIP Provider AU or SIP Provider US), provide them with the following information:
+When onboarding a new SIP trunk with a regional SIP provider (SIP Provider AU or SIP Provider US), exchange the following information. The SBC will register with and initiate connections to the provider:
 
 | Information | Value | Notes |
 |-------------|-------|-------|
-| **Destination IP Address** | Virtual IP on Internal interface (e.g., 169.254.64.10) | Single IP - do NOT provide individual SBC IPs |
-| **Destination Port** | 5060 (UDP/TCP) or 5061 (TLS) | Based on your security requirements |
-| **FQDN (Optional)** | e.g., sbc.example.com | Must resolve to the VIP; useful for TLS certificate validation |
+| **SBC Source IP Address** | Virtual IP on Internal interface (e.g., 169.254.64.10) | Provider should expect SIP REGISTER and calls from this IP |
+| **Provider's SIP Server Address** | Provided by SIP Provider | The SBC will register to this address |
+| **SIP Port** | 5060 (UDP/TCP) or 5061 (TLS) | Based on your security requirements |
+| **Registration Credentials** | Username/password from provider | SBC uses these to authenticate with provider |
 | **Transport Protocol** | UDP, TCP, or TLS | TLS recommended for security |
 | **Codec Support** | G.711, G.729, etc. | As per your configuration |
 
-**Important:** Always provide the **Virtual IP**, not the individual SBC instance IPs. The provider should configure their equipment to send all traffic to this single destination.
+**Important:** The SBC initiates registration and maintains the connection to the provider. The provider does not need to initiate inbound connections to the SBC. Provide the provider with the **Virtual IP** as the expected source address for SIP traffic.
 
 #### Failover Behavior and Call Impact
 
@@ -2493,10 +2488,10 @@ Understanding what happens during failover helps set expectations with your regi
 | **Active calls in progress (PSTN)** | Calls are **dropped** - SIP is not call-stateful across failover. Callers must redial. |
 | **Active calls in progress (Teams IP)** | Calls may be **maintained** if using IP-based routing (Teams handles re-INVITE) |
 | **New calls during failover** | Brief interruption (seconds) while route table updates; new calls then succeed |
-| **New calls after failover** | Route seamlessly to the new Active SBC - no difference from caller perspective |
-| **Regional SIP provider reconfiguration** | **Not required** - the VIP remains the same, only the underlying SBC changes |
+| **New calls after failover** | Route seamlessly via the new Active SBC - no difference from caller perspective |
+| **Regional SIP provider reconfiguration** | **Not required** - the new Active SBC re-registers with the provider using the same VIP |
 
-**Key Point:** Communicate to your regional SIP provider that during rare failover events, there may be a brief interruption lasting a few seconds. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - new calls will automatically route to the new Active SBC.
+**Key Point:** Communicate to your regional SIP provider that during rare failover events, there may be a brief interruption lasting a few seconds while the new Active SBC re-registers. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - the new Active SBC automatically re-registers and resumes normal operation.
 
 #### HA Connectivity Architecture Diagram
 
@@ -3339,8 +3334,8 @@ This appendix provides visual representations of all network flows in the AudioC
     └───────────────────┘                                    │  Internal: 5060   │
                                                              │                   │
     ┌───────────────────┐                                    │                   │
-    │  PSTN PROVIDER    │─────────── UDP 5060 ──────────────►│                   │
-    │                   │◄────────── UDP 5060 ───────────────│                   │
+    │  PSTN PROVIDER    │◄────────── UDP 5060 ───────────────│                   │
+    │                   │            (SBC initiates)         │                   │
     └───────────────────┘                                    │                   │
                                                              │                   │
     ┌───────────────────┐                                    │                   │
@@ -3371,8 +3366,8 @@ This appendix provides visual representations of all network flows in the AudioC
     └───────────────────┘                                    │                   │
                                                              │  Internal: 5060   │
     ┌───────────────────┐                                    │  PSTN: 5060       │
-    │  LOCAL PSTN       │─────────── UDP 5060 ──────────────►│                   │
-    │  PROVIDER         │◄────────── UDP 5060 ───────────────│                   │
+    │  LOCAL PSTN       │◄────────── UDP 5060 ───────────────│                   │
+    │  PROVIDER         │            (SBC initiates)         │                   │
     └───────────────────┘                                    └───────────────────┘
 ```
 
@@ -3626,7 +3621,7 @@ This appendix provides visual representations of all network flows in the AudioC
 | Teams Media | Microsoft 365 | Proxy SBC (WAN) | UDP | 20000-29999 | SRTP |
 | LMO Media | Teams Endpoints | SBC | UDP | 30000-39999 | RTP |
 | Internal Media | Downstream SBC | Proxy SBC | UDP | 10000-19999 | RTP |
-| PSTN Media | PSTN Provider | SBC | UDP | 40000-49999 | RTP |
+| PSTN Media | SBC | PSTN Provider | UDP | 40000-49999 | RTP |
 | 3rd Party PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
 | **Management** |
 | SNMP Traps | SBC | OVOC | UDP | 162 | None |
@@ -4114,10 +4109,10 @@ flowchart TB
     end
 
     %% Cloud to AWS Connections
-    Teams -->|"TLS 5061"| AUActive
+    Teams <-->|"TLS 5061"| AUActive
     M365 <-->|"HTTPS 443"| OVOC
-    SIPAU -->|"UDP 5060"| AUActive
-    SIPUS -->|"UDP 5060"| USActive
+    AUActive -->|"UDP 5060"| SIPAU
+    USActive -->|"UDP 5060"| SIPUS
 
     %% HA Connections
     AUActive <--> AUStandby
