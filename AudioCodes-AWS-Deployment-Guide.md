@@ -4080,10 +4080,8 @@ flowchart LR
     subgraph SBC["🔶 PROXY SBC - The Gateway"]
         direction TB
 
-        subgraph Ports["Network Ports"]
-            direction LR
-            WAN["🔴 WAN Port<br/>eth2<br/>External Side"]
-            LAN["🟢 LAN Port<br/>eth1<br/>Internal Side"]
+        subgraph ExtPort["External Interface"]
+            WAN["🔴 eth2 - WAN<br/>─────────────<br/>SIP Interface: External<br/>+ PSTN<br/>─────────────<br/>Media: M365 + PSTN"]
         end
 
         subgraph Core["Call Processing Engine"]
@@ -4091,8 +4089,16 @@ flowchart LR
             Process["Inspect & Route Calls<br/>• Validate caller<br/>• Apply policies<br/>• Convert protocols"]
         end
 
-        subgraph HAPort["HA Port"]
-            HA["🔵 eth3<br/>Sync to Standby"]
+        subgraph IntPort["Internal Interface"]
+            LAN["🟢 eth1 - LAN<br/>─────────────<br/>SIP Interface: Internal<br/>─────────────<br/>Media: Internal + LMO"]
+        end
+
+        subgraph MgmtPort["Management"]
+            MGMT["⚪ eth0 - OAMP<br/>Admin Access"]
+        end
+
+        subgraph HAPort["HA Interface"]
+            HA["🔵 eth3 - HA<br/>Sync to Standby"]
         end
     end
 
@@ -4110,9 +4116,9 @@ flowchart LR
 
     %% === TRAFFIC FLOWS ===
 
-    %% External to SBC (enters WAN port)
-    Teams <-->|"Encrypted<br/>Voice"| WAN
-    SIPProvider <---|"SBC Registers<br/>Outbound"| WAN
+    %% External to SBC (Teams = bidirectional, SIP Provider = outbound)
+    Teams <-->|"TLS 5061<br/>Bidirectional"| WAN
+    WAN -->|"SBC Registers<br/>OUTBOUND"| SIPProvider
 
     %% Through the SBC (WAN → Processing → LAN)
     WAN -->|"IN"| Process
@@ -4132,21 +4138,34 @@ flowchart LR
     classDef wan fill:#ef5350,stroke:#c62828,color:#fff
     classDef lan fill:#4caf50,stroke:#2e7d32,color:#fff
     classDef ha fill:#2196f3,stroke:#1565c0,color:#fff
+    classDef mgmt fill:#9e9e9e,stroke:#616161,color:#fff
     classDef process fill:#fff3e0,stroke:#ff9800,color:#000
 
     class Teams,SIPProvider external
     class WAN wan
     class LAN lan
     class HA,Backup ha
+    class MGMT mgmt
     class Process process
     class Downstream,Phones internal
 ```
 
+**Interface Summary (from D.8.8 Matrix):**
+
+| Interface | Port | IP Interface | SIP Interface(s) | Media Realm(s) | Connects To |
+|-----------|------|--------------|------------------|----------------|-------------|
+| **eth0** | GE_1 | OAMP | N/A | N/A | OVOC, Stack Manager (management only) |
+| **eth1** | GE_2 | LAN | Internal | Internal, LMO | Downstream SBCs, IP Phones |
+| **eth2** | GE_3 | WAN | External, PSTN | M365, PSTN | Teams (bidirectional), SIP Provider (outbound) |
+| **eth3** | GE_4 | HA | N/A | N/A | Standby SBC (heartbeat & state sync) |
+
 **Key Concepts:**
-- **WAN Port (eth2)** - Faces the internet. This is where Microsoft Teams and phone carriers connect.
-- **LAN Port (eth1)** - Faces your internal network. This is where your office phones and branch sites connect.
-- **Call Processing** - Every call passes through the engine which validates, secures, and routes it.
-- **Standby SBC** - An identical backup that takes over instantly if the primary fails.
+- **eth2 (WAN)** - The external interface handles TWO types of traffic:
+  - **Microsoft Teams**: Bidirectional (Teams calls in, your calls out to Teams)
+  - **SIP Provider**: Outbound only (SBC registers with carrier; carrier sends calls back on same connection)
+- **eth1 (LAN)** - Internal interface for your branch offices and phones
+- **eth0 (OAMP)** - Management interface for admin access (not call traffic)
+- **eth3 (HA)** - Dedicated link to keep the Standby SBC synchronized
 
 ---
 
@@ -4157,11 +4176,12 @@ flowchart LR
 %% D.8.7 - Technical View: AWS Subnets and HA Mechanism
 
 flowchart TB
-    %% === CLOUD SERVICES ===
-    subgraph Cloud["☁️ Cloud Services"]
+    %% === EXTERNAL SERVICES ===
+    subgraph ExtServices["☁️ External Services"]
         direction LR
         Teams["Microsoft Teams<br/>Direct Routing"]
         M365["Microsoft 365<br/>Graph API"]
+        SIP["SIP Provider<br/>(PSTN Carrier)"]
     end
 
     %% === AWS VPC ===
@@ -4169,20 +4189,22 @@ flowchart TB
         direction TB
 
         %% WAN Subnet
-        subgraph WANSubnet["WAN Subnet (Public)"]
+        subgraph WANSubnet["WAN Subnet (Public) - External Interface"]
             EIP["Elastic IP<br/>(Public Address)"]
         end
 
-        %% The two SBCs
+        %% The two SBCs with detailed interface labels
         subgraph HAPair["HA Pair"]
             direction LR
             subgraph Active["🟢 Active SBC"]
-                A_WAN["eth2<br/>WAN"]
+                A_MGMT["eth0 OAMP"]
+                A_WAN["eth2 WAN<br/>SIP: External+PSTN<br/>Media: M365+PSTN"]
                 A_Core["Call<br/>Engine"]
-                A_LAN["eth1<br/>LAN"]
-                A_HA["eth3"]
+                A_LAN["eth1 LAN<br/>SIP: Internal<br/>Media: Internal+LMO"]
+                A_HA["eth3 HA"]
             end
             subgraph Stand["🔵 Standby SBC"]
+                S_MGMT["eth0"]
                 S_WAN["eth2"]
                 S_Core["Call<br/>Engine"]
                 S_LAN["eth1"]
@@ -4197,13 +4219,14 @@ flowchart TB
         end
 
         %% LAN Subnet
-        subgraph LANSubnet["LAN Subnet (Private)"]
+        subgraph LANSubnet["LAN Subnet (Private) - Internal Interface"]
             LANgw["Gateway to<br/>On-Premises"]
         end
 
-        %% Management
-        subgraph Mgmt["Management"]
+        %% Management Subnet
+        subgraph MgmtSubnet["Management Subnet - OAMP Interface"]
             OVOC["OVOC"]
+            StackMgr["Stack Manager"]
         end
     end
 
@@ -4215,14 +4238,23 @@ flowchart TB
 
     %% === CONNECTIONS ===
 
-    %% Cloud to AWS
-    Teams <-->|"TLS 5061"| EIP
+    %% Teams: Bidirectional via WAN
+    Teams <-->|"TLS 5061<br/>Bidirectional"| EIP
+
+    %% SIP Provider: OUTBOUND from WAN (SBC registers with carrier)
+    EIP -->|"UDP 5060<br/>OUTBOUND<br/>Registration"| SIP
+
+    %% Management traffic
     M365 <-->|"HTTPS"| OVOC
+    OVOC --> A_MGMT
+    StackMgr --> A_MGMT
+
+    %% EIP to WAN interface
     EIP --- A_WAN
 
-    %% Through Active SBC
-    A_WAN --- A_Core
-    A_Core --- A_LAN
+    %% Through Active SBC (traffic flow)
+    A_WAN -->|"Inbound<br/>Calls"| A_Core
+    A_Core -->|"Routed<br/>Calls"| A_LAN
     A_LAN --- LANgw
 
     %% To On-Prem
@@ -4230,7 +4262,7 @@ flowchart TB
     DS --> EP
 
     %% HA Sync between SBCs
-    A_HA <-->|"Heartbeat"| S_HA
+    A_HA <-->|"Heartbeat<br/>State Sync"| S_HA
     A_HA --- VIP
     S_HA --- VIP
 
@@ -4243,14 +4275,18 @@ flowchart TB
 
     %% === STYLING ===
     classDef cloud fill:#1a73e8,stroke:#0d47a1,color:#fff
+    classDef sip fill:#e91e63,stroke:#c2185b,color:#fff
     classDef active fill:#4caf50,stroke:#2e7d32,color:#fff
     classDef standby fill:#2196f3,stroke:#1565c0,color:#fff
     classDef ha fill:#9c27b0,stroke:#6a1b9a,color:#fff
     classDef subnet fill:#fff3e0,stroke:#ff9800,color:#000
     classDef onprem fill:#616161,stroke:#424242,color:#fff
+    classDef mgmt fill:#9e9e9e,stroke:#616161,color:#fff
 
     class Teams,M365 cloud
+    class SIP sip
     class A_WAN,A_Core,A_LAN,A_HA active
+    class A_MGMT,S_MGMT mgmt
     class S_WAN,S_Core,S_LAN,S_HA,Stand standby
     class VIP,RT ha
     class EIP,LANgw subnet
