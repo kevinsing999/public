@@ -4064,126 +4064,100 @@ This section provides detailed low-level interface mappings for all AudioCodes a
 
 #### D.8.7 Complete Solution - End-to-End Connectivity Map
 
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                              COMPLETE SOLUTION - END-TO-END CONNECTIVITY                                         │
-└─────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+```mermaid
+%%{init: {'theme': 'default'}}%%
+%% D.8.7 Complete Solution - End-to-End Connectivity
+%% AudioCodes SBC Architecture
 
-                                         INTERNET / CLOUD
-    ╔═══════════════════════════════════════════════════════════════════════════════════════════════════════════╗
-    ║                                                                                                            ║
-    ║   ┌────────────────────┐    ┌────────────────────┐    ┌────────────────────┐                              ║
-    ║   │  MICROSOFT TEAMS   │    │   MICROSOFT 365    │    │  SIP PROVIDER AU   │                              ║
-    ║   │  Direct Routing    │    │   Graph API        │    │  (Australian PSTN) │                              ║
-    ║   │                    │    │                    │    │                    │                              ║
-    ║   │  52.112.0.0/14     │    │ graph.microsoft.com│    │  Carrier IPs       │                              ║
-    ║   │  52.120.0.0/14     │    │ login.microsoft... │    │                    │                              ║
-    ║   │  52.122.0.0/15     │    │                    │    │                    │                              ║
-    ║   └─────────┬──────────┘    └─────────┬──────────┘    └─────────┬──────────┘                              ║
-    ║             │                         │                         │                                          ║
-    ║             │ TLS 5061                │ HTTPS 443               │ UDP 5060                                 ║
-    ║             │ UDP 3478-3481           │ (Bidirectional)         │ UDP (Media)                              ║
-    ║             │ UDP 49152-53247         │                         │                                          ║
-    ║             │                         │                         │                                          ║
-    ╚═════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════╝
-                  │                         │                         │
-    ══════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════════
-                  │                  AWS VPC (AUSTRALIA REGION)       │
-    ══════════════╪═════════════════════════╪═════════════════════════╪══════════════════════════════════════════════
-                  │                         │                         │
-                  ▼                         │                         │
-    ┌─────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                              AU PROXY SBC (HA PAIR)                                                          │
-    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
-    │  │      ACTIVE         │◄──►│      STANDBY        │   HA Subnet: 169.254.64.x (Virtual IP)                  │
-    │  │      (AZ-A)         │    │      (AZ-B)         │                                                         │
-    │  └─────────────────────┘    └─────────────────────┘                                                         │
-    │                                                                                                              │
-    │  Interfaces:                                                                                                 │
-    │    • External (WAN): TLS 5061 to Teams, SRTP 20000-29999                                                    │
-    │    • Internal (LAN): UDP 5060 to Downstream/PSTN, RTP 6000-49999  ◄──────────────────────────────────────┐  │
-    │    • Management: HTTPS 443, SSH 22, SNMP, LDAPS 636                                                      │  │
-    │    • HA: Heartbeat, AWS API (route table updates)                                                        │  │
-    │                                                                                                          │  │
-    │  IP Groups: Teams DR, Downstream SBC, SIP Provider AU, 3rd Party PBX, Proxy-to-Proxy                     │  │
-    └───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┘
-                  │                         │                                                                   │
-                  │                         │                                                                   │
-    ┌─────────────┼─────────────────────────┼───────────────────────────────────────────────────────────────────┼──┐
-    │             │    MANAGEMENT ZONE      │                                                                   │  │
-    │             │                         ▼                                                                   │  │
-    │  ┌──────────┴────────────┐  ┌─────────────────────┐  ┌─────────────────────┐  ┌────────────────────────┐ │  │
-    │  │    STACK MANAGER      │  │        OVOC         │  │   ARM CONFIGURATOR  │  │     ARM ROUTER (AU)    │ │  │
-    │  │    t3.medium          │  │     m5.4xlarge      │  │      m4.xlarge      │  │       m4.large         │ │  │
-    │  │                       │  │                     │  │                     │  │                        │ │  │
-    │  │  • HTTPS 443 (Admin)  │  │  • HTTPS 443 (UI)   │  │  • HTTPS 443 (UI)   │  │  • HTTPS 443 (Query)   │ │  │
-    │  │  • SSH 22             │  │  • SSH 22           │  │  • SSH 22           │  │  • SSH 22              │ │  │
-    │  │  • AWS APIs (outbound)│  │  • SNMP 162 (traps) │  │  • REST API 443     │  │  • Config sync         │ │  │
-    │  │                       │  │  • QoE TCP 5001     │  │                     │  │                        │ │  │
-    │  │  IAM Role:            │  │  • Graph API 443 ◄──┼──┤  • OAuth 443        │  │  • ARM Cfg sync 443    │ │  │
-    │  │  ec2:*, cfn:*, iam:*  │  │    (bidirectional)  │  │  • SBC push 443     │  │  • SBC queries 443     │ │  │
-    │  └───────────────────────┘  └─────────────────────┘  └─────────────────────┘  └────────────────────────┘ │  │
-    │                                                                                                           │  │
-    └───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┘
-                                                                                                                │
-    ════════════════════════════════════════════════════════════════════════════════════════════════════════════╪══
-                                     AWS DIRECT CONNECT / VPN                                                   │
-    ════════════════════════════════════════════════════════════════════════════════════════════════════════════╪══
-                                                                                                                │
-    ┌───────────────────────────────────────────────────────────────────────────────────────────────────────────┼──┐
-    │                              ON-PREMISES DATA CENTER                                                      │  │
-    │                                                                                                           │  │
-    │  ┌─────────────────────────────┐    ┌─────────────────────────────┐    ┌────────────────────────────────┐│  │
-    │  │      DOWNSTREAM SBC         │    │   DOWNSTREAM SBC (LBO)      │    │      3RD PARTY SYSTEMS         ││  │
-    │  │      (Branch Sites)         │    │   (Sites with Local PSTN)   │    │                                ││  │
-    │  │      Mediant 800            │    │   Mediant 800               │    │  • Legacy PBX                  ││  │
-    │  │                             │    │                             │    │  • Radio/Emergency Systems     ││  │
-    │  │  GE_1: Management           │    │  GE_1: Management           │    │  • Analog Gateways             ││  │
-    │  │  GE_2: Internal (LAN)  ─────┼────┼── GE_2: Internal (LAN) ─────┼────┼───────────────────────────────►│◄─┘
-    │  │  GE_3: HA                   │    │  GE_3: HA                   │    │                                │
-    │  │                             │    │  └──► Local PSTN Trunk      │    │  UDP 5060 (SIP)                │
-    │  │  IP Groups:                 │    │       (SIP Provider)        │    │  UDP (RTP Media)               │
-    │  │  • Proxy SBC Trunk          │    │                             │    │                                │
-    │  │  • Registered Endpoints     │    │  IP Groups:                 │    └────────────────────────────────┘
-    │  │                             │    │  • Proxy SBC Trunk          │
-    │  │  Auth: On-prem AD (LDAPS)   │    │  • Registered Endpoints     │    ┌────────────────────────────────┐
-    │  │                             │    │  • PSTN (Telco) Trunk       │    │    ACTIVE DIRECTORY            │
-    │  └──────────────┬──────────────┘    │                             │    │    Domain Controllers          │
-    │                 │                   │  Auth: On-prem AD (LDAPS)   │    │                                │
-    │                 │                   └──────────────┬──────────────┘    │  LDAPS TCP 636 ◄───────────────┤
-    │                 │                                  │                   │  (SBC Authentication)          │
-    │                 ▼                                  ▼                   │                                │
-    │  ┌─────────────────────────────────────────────────────────────────┐   └────────────────────────────────┘
-    │  │                    REGISTERED ENDPOINTS                          │
-    │  │                                                                  │
-    │  │  • IP Phones (AudioCodes, Poly, Yealink)  • SIP Soft Clients    │
-    │  │  • Conference Room Devices                • Analog via ATA      │
-    │  │                                                                  │
-    │  │  UDP 5060-5069 (SIP Registration/Signaling)                     │
-    │  │  UDP RTP Ports (Media)                                          │
-    │  └──────────────────────────────────────────────────────────────────┘
-    │                                                                                                              │
-    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+flowchart TB
+    %% Internet Layer
+    subgraph Cloud["☁️ Internet / Cloud"]
+        Teams["Microsoft Teams<br/>Direct Routing"]
+        M365["Microsoft 365<br/>Graph API"]
+        SIPAU["SIP Provider AU"]
+        SIPUS["SIP Provider US"]
+    end
 
+    %% Australia VPC
+    subgraph AUVPC["🔶 AWS Australia"]
+        subgraph AUProxy["AU Proxy SBC HA"]
+            AUActive["Active"]
+            AUStandby["Standby"]
+        end
+        subgraph AUMgmt["Management"]
+            StackMgr["Stack Manager"]
+            OVOC["OVOC"]
+            ARM["ARM"]
+        end
+    end
 
-                                 US REGION (Similar Architecture)
-    ┌──────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-    │                              US PROXY SBC (HA PAIR) - us-east-1                                              │
-    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
-    │  │      ACTIVE         │◄──►│      STANDBY        │                                                         │
-    │  │      (AZ-A)         │    │      (AZ-B)         │                                                         │
-    │  └─────────────────────┘    └─────────────────────┘                                                         │
-    │                                                                                                              │
-    │  Unique Connectivity:                                                                                        │
-    │    • SIP Provider US (US PSTN Carrier) - UDP 5060/5061                                                      │
-    │    • Proxy-to-Proxy Trunk (to AU Proxy SBC) - UDP/TCP 5060                                                  │
-    │                                                                                                              │
-    │  ┌─────────────────────┐    ┌─────────────────────┐                                                         │
-    │  │    STACK MANAGER    │    │    ARM ROUTER (US)  │                                                         │
-    │  │      t3.medium      │    │       m4.large      │                                                         │
-    │  └─────────────────────┘    └─────────────────────┘                                                         │
-    │                                                                                                              │
-    └──────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+    %% US VPC
+    subgraph USVPC["🔶 AWS US"]
+        subgraph USProxy["US Proxy SBC HA"]
+            USActive["Active"]
+            USStandby["Standby"]
+        end
+        USStack["Stack Manager"]
+        ARMUS["ARM Router"]
+    end
+
+    %% On-Premises
+    subgraph OnPrem["🏢 On-Premises"]
+        DSSBC["Downstream SBC"]
+        DSLBO["Downstream SBC<br/>+ LBO"]
+        PBX["3rd Party PBX"]
+        AD["Active Directory"]
+        subgraph EP["Endpoints"]
+            Phones["IP Phones"]
+            Soft["Softphones"]
+        end
+    end
+
+    %% Cloud to AWS Connections
+    Teams -->|"TLS 5061"| AUActive
+    M365 <-->|"HTTPS 443"| OVOC
+    SIPAU -->|"UDP 5060"| AUActive
+    SIPUS -->|"UDP 5060"| USActive
+
+    %% HA Connections
+    AUActive <--> AUStandby
+    USActive <--> USStandby
+
+    %% Cross-Region
+    AUActive <-->|"Proxy-to-Proxy"| USActive
+
+    %% Management
+    StackMgr --> AUActive
+    OVOC --> AUActive
+    ARM --> AUActive
+    USStack --> USActive
+    ARMUS --> USActive
+
+    %% AWS to On-Prem
+    AUActive <-->|"UDP 5060"| DSSBC
+    AUActive <-->|"UDP 5060"| DSLBO
+    AUActive <-->|"UDP 5060"| PBX
+
+    %% On-Prem Internal
+    DSSBC <-->|"LDAPS"| AD
+    DSLBO <-->|"LDAPS"| AD
+    DSSBC --> Phones
+    DSSBC --> Soft
+    DSLBO --> Phones
+
+    %% Styling
+    classDef cloud fill:#4285f4,stroke:#1a73e8,color:#fff
+    classDef aws fill:#ff9900,stroke:#cc7a00,color:#000
+    classDef sbc fill:#34a853,stroke:#1e7e34,color:#fff
+    classDef mgmt fill:#9c27b0,stroke:#6a1b9a,color:#fff
+    classDef onprem fill:#616161,stroke:#424242,color:#fff
+    classDef endpoint fill:#03a9f4,stroke:#0288d1,color:#fff
+
+    class Teams,M365,SIPAU,SIPUS cloud
+    class AUActive,AUStandby,USActive,USStandby sbc
+    class StackMgr,OVOC,ARM,USStack,ARMUS mgmt
+    class DSSBC,DSLBO,PBX,AD onprem
+    class Phones,Soft endpoint
 ```
 
 #### D.8.8 Interface Summary Matrix
