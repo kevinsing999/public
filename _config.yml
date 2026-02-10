@@ -1,0 +1,5 @@
+remote_theme: pages-themes/cayman@v0.2.0
+title: AudioCodes AWS Deployment Guide
+description: Unified Deployment and Configuration Guide for AudioCodes SBC Infrastructure on AWS with Microsoft Teams Direct Routing
+plugins:
+  - jekyll-remote-theme
