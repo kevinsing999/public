@@ -98,14 +98,15 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 flowchart TB
     subgraph VPC["AWS VPC (Single Region)"]
         subgraph AZA["Availability Zone A"]
-            SBC_Active["<b>Mediant VE SBC (Active)</b><br/>ENI: 10.0.1.x<br/><br/>Calls AWS API on failover"]
+            SBC_Active["Mediant VE SBC (Active)<br/>ENI: 10.0.1.x<br/><br/>Calls AWS API on failover"]
         end
 
         subgraph AZB["Availability Zone B"]
-            SBC_Standby["<b>Mediant VE SBC (Standby)</b><br/>ENI: 10.0.2.x<br/><br/>Calls AWS API on failover"]
+            SBC_Standby["Mediant VE SBC (Standby)<br/>ENI: 10.0.2.x<br/><br/>Calls AWS API on failover"]
         end
 
-        SBC_Active <-->|"HA Subnet"| SBC_Standby
+        SBC_Active -->|"HA Subnet"| SBC_Standby
+        SBC_Standby -->|"HA Subnet"| SBC_Active
 
         subgraph SM["Stack Manager VM"]
             SM_Details["- Deploys initial SBC HA stack via CloudFormation<br/>- Configures Virtual IPs (169.254.64.x) in route tables<br/>- Day 2: Software updates, stack healing, topology changes<br/>- Does NOT participate in active HA switchover"]
@@ -174,7 +175,8 @@ flowchart TB
             subgraph HA_NP["SBC HA Pair"]
                 SBC1_NP["Mediant VE SBC #1<br/>(AZ-A)<br/>Active"]
                 SBC2_NP["Mediant VE SBC #2<br/>(AZ-B)<br/>Standby"]
-                SBC1_NP <--> SBC2_NP
+                SBC1_NP --> SBC2_NP
+                SBC2_NP --> SBC1_NP
             end
             SM_NP["Stack Manager<br/>(t3.medium)<br/>HA Deployment & Day 2 Ops"]
             subgraph MGMT_NP["Management Components"]
@@ -210,7 +212,8 @@ flowchart TB
             subgraph HA_AUS["SBC HA Pair"]
                 SBC1_AUS["Mediant VE SBC #1<br/>(AZ-A)<br/>Active"]
                 SBC2_AUS["Mediant VE SBC #2<br/>(AZ-B)<br/>Standby"]
-                SBC1_AUS <--> SBC2_AUS
+                SBC1_AUS --> SBC2_AUS
+                SBC2_AUS --> SBC1_AUS
             end
             SM_AUS["Stack Manager<br/>(t3.medium)<br/>HA Deployment & Day 2 Ops"]
             subgraph MGMT_AUS["Management Components"]
@@ -223,7 +226,8 @@ flowchart TB
             subgraph HA_US["SBC HA Pair"]
                 SBC1_US["Mediant VE SBC #1<br/>(AZ-A)<br/>Active"]
                 SBC2_US["Mediant VE SBC #2<br/>(AZ-B)<br/>Standby"]
-                SBC1_US <--> SBC2_US
+                SBC1_US --> SBC2_US
+                SBC2_US --> SBC1_US
             end
             SM_US["Stack Manager<br/>(t3.medium)<br/>US Region Manager"]
             ARM_RTR_US["ARM Router<br/>(m4.large)"]
@@ -1000,7 +1004,8 @@ flowchart TB
         proxy["Proxy SBC<br/>(HA Pair)"]
         entra["Microsoft Entra ID<br/>(Azure AD)"]
 
-        proxy <-->|"OAuth"| entra
+        proxy -->|"OAuth"| entra
+        entra -->|"OAuth"| proxy
     end
 
     subgraph onprem["ON-PREMISES"]
@@ -1009,10 +1014,12 @@ flowchart TB
         downstream["Downstream<br/>SBCs"]
         ad["Active Directory<br/>Domain Controllers"]
 
-        downstream <-->|"LDAPS"| ad
+        downstream -->|"LDAPS"| ad
+        ad -->|"LDAPS"| downstream
     end
 
-    proxy <-->|"Direct Connect"| downstream
+    proxy -->|"Direct Connect"| downstream
+    downstream -->|"Direct Connect"| proxy
 
     style proxy fill:#99ccff,stroke:#0066cc,stroke-width:2px
     style entra fill:#0078d4,stroke:#005a9e,stroke-width:2px,color:#fff
@@ -2462,9 +2469,6 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 - Failover is transparent to the provider - the new Active SBC re-registers and resumes the connection
 
 ```mermaid
----
-title: SBC Outbound Registration (AU/US Regions)
----
 flowchart LR
     subgraph SBC["Your HA SBC Pair"]
         direction TB
@@ -2482,9 +2486,6 @@ flowchart LR
 **How the VIP Works**
 
 ```mermaid
----
-title: VIP and VPC Route Table Failover Mechanism
----
 flowchart TB
     VIP["Virtual IP<br/>169.254.64.x"]
     RouteTable["VPC Route Table<br/>(Updated on Failover)"]
@@ -2546,9 +2547,6 @@ Understanding what happens during failover helps set expectations with your regi
 The following diagram shows how different entities connect to the HA Proxy SBC pair, distinguishing between external (internet-facing) and internal (private network) connectivity. Note that each region (Australia/US) has its own Proxy SBC pair with regional SIP provider connectivity for PSTN breakout:
 
 ```mermaid
----
-title: HA Connectivity Architecture - External vs Internal
----
 flowchart TB
     subgraph INTERNET["INTERNET - EXTERNAL CONNECTIVITY (Via Elastic IP - Public)"]
         Teams["Microsoft Teams<br/>52.112.0.0/14"]
@@ -2567,7 +2565,8 @@ flowchart TB
             subgraph AZB["Availability Zone B"]
                 SBC2["SBC #2 (STANDBY)<br/>Ready to take over on failure"]
             end
-            SBC1 <-->|"HA Link<br/>Heartbeat"| SBC2
+            SBC1 -->|"HA Link<br/>Heartbeat"| SBC2
+            SBC2 -->|"HA Link<br/>Heartbeat"| SBC1
         end
 
         LAN["INTERNAL INTERFACE (LAN)"]
@@ -2668,9 +2667,12 @@ flowchart LR
         Recorder["EXISTING VOICE RECORDER<br/>Can capture and decode RTP"]
     end
 
-    Teams <-->|"SRTP"| ProxySBC
-    ProxySBC <-->|"RTP"| DownstreamSBC
-    DownstreamSBC <-->|"RTP"| IPPhones
+    Teams -->|"SRTP"| ProxySBC
+    ProxySBC -->|"SRTP"| Teams
+    ProxySBC -->|"RTP"| DownstreamSBC
+    DownstreamSBC -->|"RTP"| ProxySBC
+    DownstreamSBC -->|"RTP"| IPPhones
+    IPPhones -->|"RTP"| DownstreamSBC
 
     ProxySBC -.->|"Port Mirror"| Recorder
     DownstreamSBC -.->|"Port Mirror"| Recorder
@@ -2711,9 +2713,12 @@ flowchart LR
         Recorder["EXISTING VOICE RECORDER<br/>Receives decrypted media<br/>from SBC via SIPREC"]
     end
 
-    Teams <-->|"SRTP"| ProxySBC
-    ProxySBC <-->|"SRTP"| DownstreamSBC
-    DownstreamSBC <-->|"SRTP"| IPPhones
+    Teams -->|"SRTP"| ProxySBC
+    ProxySBC -->|"SRTP"| Teams
+    ProxySBC -->|"SRTP"| DownstreamSBC
+    DownstreamSBC -->|"SRTP"| ProxySBC
+    DownstreamSBC -->|"SRTP"| IPPhones
+    IPPhones -->|"SRTP"| DownstreamSBC
 
     ProxySBC -.->|"SIPREC<br/>(decrypted copy)"| Recorder
     DownstreamSBC -.->|"SIPREC"| Recorder
@@ -3298,7 +3303,8 @@ flowchart TB
         subgraph ProxySBC["PROXY SBC (HA Pair)"]
             Active["Active<br/>(AZ-A)"]
             Standby["Standby<br/>(AZ-B)"]
-            Active <--> Standby
+            Active --> Standby
+            Standby --> Active
         end
         ProxySBCInfo["External Interface (WAN/DMZ)<br/>- Teams Direct Routing (TLS 5061)<br/>- Media: UDP 20000-29999<br/><br/>Internal Interface (LAN)<br/>- Downstream SBCs (UDP 5060)<br/>- Regional SIP Provider (UDP 5060)<br/>- 3rd Party PBX (UDP 5060)<br/>- Media: UDP 6000-49999"]
     end
@@ -3318,14 +3324,16 @@ flowchart TB
     end
 
     Teams -->|"TLS 5061 (Signalling)<br/>UDP 3478-3481, 49152-53247 (Media)"| ProxySBC
-    M365 <-->|"HTTPS 443<br/>OVOC - MS: API queries<br/>MS - OVOC: Webhook notifications"| OVOC
+    M365 -->|"HTTPS 443<br/>OVOC - MS: API queries<br/>MS - OVOC: Webhook notifications"| OVOC
+    OVOC -->|"HTTPS 443<br/>OVOC - MS: API queries<br/>MS - OVOC: Webhook notifications"| M365
 
     StackMgr --> ProxySBC
     ARMConfig --> ProxySBC
     ARMRouter --> ProxySBC
     OVOC --> ProxySBC
 
-    ProxySBC <-->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| SIPProvider
+    ProxySBC -->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| SIPProvider
+    SIPProvider -->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| ProxySBC
 
     ARMConfig -->|"HTTPS 443"| DownstreamSBC1
     ARMConfig -->|"HTTPS 443"| DownstreamSBC2
@@ -3342,9 +3350,6 @@ flowchart TB
 ### D.2 SIP Signalling Flows
 
 ```mermaid
----
-title: SIP Signaling Flow Diagram
----
 flowchart LR
     subgraph external["EXTERNAL (TLS Encrypted)"]
         Teams["Microsoft Teams<br/>52.112.0.0/14<br/>52.122.0.0/15"]
@@ -3377,20 +3382,27 @@ flowchart LR
     end
 
     %% External TLS - Bidirectional
-    Teams <-->|"TLS 5061"| ProxySBC
+    Teams -->|"TLS 5061"| ProxySBC
+    ProxySBC -->|"TLS 5061"| Teams
 
     %% Internal UDP - Bidirectional
-    DownstreamSBC <-->|"UDP 5060"| ProxySBC
-    PBX <-->|"UDP 5060"| ProxySBC
-    OtherProxy <-->|"TCP 5060/5061"| ProxySBC
-    DownstreamLBO <-->|"UDP 5060"| ProxySBC
+    DownstreamSBC -->|"UDP 5060"| ProxySBC
+    ProxySBC -->|"UDP 5060"| DownstreamSBC
+    PBX -->|"UDP 5060"| ProxySBC
+    ProxySBC -->|"UDP 5060"| PBX
+    OtherProxy -->|"TCP 5060/5061"| ProxySBC
+    ProxySBC -->|"TCP 5060/5061"| OtherProxy
+    DownstreamLBO -->|"UDP 5060"| ProxySBC
+    ProxySBC -->|"UDP 5060"| DownstreamLBO
 
     %% Internal UDP - Unidirectional (SBC initiates)
     ProxySBC -->|"UDP 5060<br/>(SBC initiates)"| PSTN
 
     %% Downstream endpoints
-    IPPhones <-->|"UDP 5060-5069"| DownstreamSBC
-    IPPhones <-->|"UDP 5060-5069"| DownstreamLBO
+    IPPhones -->|"UDP 5060-5069"| DownstreamSBC
+    DownstreamSBC -->|"UDP 5060-5069"| IPPhones
+    IPPhones -->|"UDP 5060-5069"| DownstreamLBO
+    DownstreamLBO -->|"UDP 5060-5069"| IPPhones
 
     %% LBO to local PSTN
     DownstreamLBO -->|"UDP 5060<br/>(SBC initiates)"| LocalProvider
@@ -3452,8 +3464,10 @@ flowchart TB
     end
 
     %% SRTP Encrypted Flows
-    M365 <-->|"SRTP"| TEAMS
-    M365 <-->|"SRTP"| TEAMS_LMO
+    M365 -->|"SRTP"| TEAMS
+    TEAMS -->|"SRTP"| M365
+    M365 -->|"SRTP"| TEAMS_LMO
+    TEAMS_LMO -->|"SRTP"| M365
 
     %% RTP Unencrypted Flows from Proxy SBC
     INTERNAL -->|"RTP"| DS_SBC
@@ -3534,7 +3548,8 @@ flowchart TB
     OVOC -->|"SNMP Poll<br/>UDP 1161-161"| SBCs
     SBCs -->|"Keep-Alive<br/>UDP 161-1161"| OVOC
     SBCs -->|"QoE Reports<br/>TCP 5001"| OVOC
-    OVOC <-->|"Device Mgmt<br/>TCP 443"| SBCs
+    OVOC -->|"Device Mgmt<br/>TCP 443"| SBCs
+    SBCs -->|"Device Mgmt<br/>TCP 443"| OVOC
     OVOC -->|"NTP<br/>UDP 123"| SBCs
 
     %% Microsoft Graph API Flows (Bidirectional)
@@ -3543,8 +3558,10 @@ flowchart TB
     WebhookMS -->|"Webhook Notifications<br/>TCP 443<br/>(Microsoft initiates)<br/>New call record available"| OVOC
 
     %% ARM Management Flows
-    ARMConfig <-->|"HTTPS<br/>TCP 443"| SBCs
-    ARMRouter <-->|"HTTPS<br/>TCP 443"| SBCs
+    ARMConfig -->|"HTTPS<br/>TCP 443"| SBCs
+    SBCs -->|"HTTPS<br/>TCP 443"| ARMConfig
+    ARMRouter -->|"HTTPS<br/>TCP 443"| SBCs
+    SBCs -->|"HTTPS<br/>TCP 443"| ARMRouter
     ARMConfig --> ARMRouter
     ARMRouter -->|"TCP 443, 22,<br/>8080, 6379"| ARMRouterAdd
 
@@ -3776,33 +3793,33 @@ flowchart TB
 
         subgraph PhysicalPorts["PHYSICAL PORTS (Front Panel)"]
             direction TB
-            GE1["<b>GE_1</b> → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN<br/>→ Admin Access, OVOC, LDAP"]
-            GE2["<b>GE_2</b> → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Registered Endpoints"]
-            GE3["<b>GE_3</b> → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN (Dedicated)<br/>→ HA Heartbeat, State Sync"]
-            GE4["<b>GE_4</b> → (Unused / Spare)"]
+            GE1["GE_1 → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN<br/>→ Admin Access, OVOC, LDAP"]
+            GE2["GE_2 → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Registered Endpoints"]
+            GE3["GE_3 → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN (Dedicated)<br/>→ HA Heartbeat, State Sync"]
+            GE4["GE_4 → (Unused / Spare)"]
         end
 
         subgraph IPInterfaces["IP INTERFACES"]
             direction TB
-            IP0["<b>Index 0: Management</b><br/>Type: OAMP | Ethernet Device: Group_1<br/>→ HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636)"]
-            IP1["<b>Index 1: Internal (LAN)</b><br/>Type: Media+Control | Ethernet Device: Group_2<br/>→ SIP UDP 5060, RTP to Proxy SBC and Endpoints"]
-            IP2["<b>Index 2: HA</b><br/>Type: Maintenance | Ethernet Device: Group_3<br/>→ HA Heartbeat and State Synchronization"]
+            IP0["Index 0: Management<br/>Type: OAMP | Ethernet Device: Group_1<br/>→ HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636)"]
+            IP1["Index 1: Internal (LAN)<br/>Type: Media+Control | Ethernet Device: Group_2<br/>→ SIP UDP 5060, RTP to Proxy SBC and Endpoints"]
+            IP2["Index 2: HA<br/>Type: Maintenance | Ethernet Device: Group_3<br/>→ HA Heartbeat and State Synchronization"]
         end
 
         subgraph MediaRealms["MEDIA REALMS"]
             direction TB
-            MR0["<b>Index 0: Internal_Media_Realm</b><br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP (Unencrypted) to Proxy SBC and Registered Endpoints"]
+            MR0["Index 0: Internal_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP (Unencrypted) to Proxy SBC and Registered Endpoints"]
         end
 
         subgraph SIPInterfaces["SIP INTERFACES"]
             direction TB
-            SIP0["<b>Index 0: Internal (LAN)</b><br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
+            SIP0["Index 0: Internal (LAN)<br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
         end
 
         subgraph IPGroups["IP GROUPS (TRUNK DEFINITIONS)"]
             direction TB
-            IPG1["<b>Proxy SBC Trunk</b><br/>Proxy Set: Proxy_SBC | Media: Internal_Media_Realm | RTP"]
-            IPG2["<b>Registered Endpoints</b><br/>Proxy Set: -- | Media: Internal_Media_Realm | RTP"]
+            IPG1["Proxy SBC Trunk<br/>Proxy Set: Proxy_SBC | Media: Internal_Media_Realm | RTP"]
+            IPG2["Registered Endpoints<br/>Proxy Set: -- | Media: Internal_Media_Realm | RTP"]
         end
     end
 
@@ -3845,29 +3862,29 @@ flowchart TB
 
         subgraph PhysicalPorts["PHYSICAL PORTS (Front Panel)"]
             direction TB
-            GE1["<b>GE_1</b> → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN"]
-            GE2["<b>GE_2</b> → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Endpoints, Local PSTN<br/><i>(Also used for PSTN LBO)</i>"]
-            GE3["<b>GE_3</b> → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN"]
-            GE4["<b>GE_4</b> → (Unused / Spare)"]
+            GE1["GE_1 → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN"]
+            GE2["GE_2 → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Endpoints, Local PSTN<br/>(Also used for PSTN LBO)"]
+            GE3["GE_3 → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN"]
+            GE4["GE_4 → (Unused / Spare)"]
         end
 
         subgraph MediaRealms["MEDIA REALMS"]
             direction TB
-            MR0["<b>Index 0: Internal_Media_Realm</b><br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Proxy SBC and Registered Endpoints"]
-            MR1["<b>Index 1: PSTN_Media_Realm</b><br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Local PSTN Provider (Local Breakout)"]
+            MR0["Index 0: Internal_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Proxy SBC and Registered Endpoints"]
+            MR1["Index 1: PSTN_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Local PSTN Provider (Local Breakout)"]
         end
 
         subgraph SIPInterfaces["SIP INTERFACES"]
             direction TB
-            SIP0["<b>Index 0: Internal (LAN)</b><br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
-            SIP1["<b>Index 1: PSTN</b><br/>Network If: Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>→ Local PSTN Provider (SIP Trunk for Local Breakout)"]
+            SIP0["Index 0: Internal (LAN)<br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
+            SIP1["Index 1: PSTN<br/>Network If: Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>→ Local PSTN Provider (SIP Trunk for Local Breakout)"]
         end
 
         subgraph IPGroups["IP GROUPS (TRUNK DEFINITIONS)"]
             direction TB
-            IPG1["<b>Proxy SBC Trunk</b><br/>Proxy Set: Proxy_SBC | Media: Internal_Media_Realm | RTP"]
-            IPG2["<b>Registered Endpoints</b><br/>Proxy Set: -- | Media: Internal_Media_Realm | RTP"]
-            IPG3["<b>PSTN (Telco) Trunk</b><br/>Proxy Set: PSTN (Telco) | Media: PSTN_Media_Realm | RTP"]
+            IPG1["Proxy SBC Trunk<br/>Proxy Set: Proxy_SBC | Media: Internal_Media_Realm | RTP"]
+            IPG2["Registered Endpoints<br/>Proxy Set: -- | Media: Internal_Media_Realm | RTP"]
+            IPG3["PSTN (Telco) Trunk<br/>Proxy Set: PSTN (Telco) | Media: PSTN_Media_Realm | RTP"]
         end
     end
 
@@ -3950,7 +3967,8 @@ flowchart TB
     AdminUsers(("Admin Users")) -->|TCP 443/22| Inbound
     SBCs(("SBCs")) -->|"UDP 162/1161<br/>TCP 5001"| Inbound
     Endpoints(("Endpoints")) -->|TCP 443| DevMgr
-    Microsoft365(("Microsoft 365")) <-->|TCP 443| GraphIntegration
+    Microsoft365(("Microsoft 365")) -->|TCP 443| GraphIntegration
+    GraphIntegration -->|TCP 443| Microsoft365
 
     Outbound -->|TCP 443/UDP 161| SBCsOut(("SBCs"))
     Outbound -->|TCP 443| MicrosoftCloud(("Microsoft Cloud"))
@@ -3963,9 +3981,6 @@ flowchart TB
 #### D.8.5 ARM (AudioCodes Routing Manager) - Interface Architecture
 
 ```mermaid
----
-title: ARM Configurator - Interface Architecture (AWS Instance: m4.xlarge)
----
 flowchart TB
     subgraph cfg["ARM CONFIGURATOR"]
         subgraph cfg_net["NETWORK INTERFACE (Single ENI)"]
@@ -4018,9 +4033,6 @@ flowchart TB
 ```
 
 ```mermaid
----
-title: ARM Router - Interface Architecture (AWS Instance: m4.large, One per Region)
----
 flowchart TB
     subgraph rtr["ARM ROUTER"]
         subgraph rtr_net["NETWORK INTERFACE (Single ENI)"]
@@ -4176,7 +4188,8 @@ flowchart LR
     %% === TRAFFIC FLOWS ===
 
     %% External to SBC (Teams = bidirectional, SIP Provider = outbound)
-    Teams <-->|"TLS 5061<br/>Bidirectional"| WAN
+    Teams -->|"TLS 5061<br/>Bidirectional"| WAN
+    WAN -->|"TLS 5061<br/>Bidirectional"| Teams
     WAN -->|"SBC Registers<br/>OUTBOUND"| SIPProvider
 
     %% Through the SBC (WAN → Processing → LAN)
@@ -4184,11 +4197,13 @@ flowchart LR
     Process -->|"OUT"| LAN
 
     %% SBC to Internal (exits LAN port)
-    LAN <-->|"Voice<br/>Traffic"| Downstream
+    LAN -->|"Voice<br/>Traffic"| Downstream
+    Downstream -->|"Voice<br/>Traffic"| LAN
     Downstream --> Phones
 
     %% HA Sync
-    HA <-.->|"Keep in Sync"| Backup
+    HA -.->|"Keep in Sync"| Backup
+    Backup -.->|"Keep in Sync"| HA
 
     %% === STYLING ===
     classDef external fill:#ef5350,stroke:#c62828,color:#fff
@@ -4298,13 +4313,15 @@ flowchart TB
     %% === CONNECTIONS ===
 
     %% Teams: Bidirectional via WAN
-    Teams <-->|"TLS 5061<br/>Bidirectional"| EIP
+    Teams -->|"TLS 5061<br/>Bidirectional"| EIP
+    EIP -->|"TLS 5061<br/>Bidirectional"| Teams
 
     %% SIP Provider: OUTBOUND from WAN (SBC registers with carrier)
     EIP -->|"UDP 5060<br/>OUTBOUND<br/>Registration"| SIP
 
     %% Management traffic
-    M365 <-->|"HTTPS"| OVOC
+    M365 -->|"HTTPS"| OVOC
+    OVOC -->|"HTTPS"| M365
     OVOC --> A_MGMT
     StackMgr --> A_MGMT
 
@@ -4317,11 +4334,13 @@ flowchart TB
     A_LAN --- LANgw
 
     %% To On-Prem
-    LANgw <--> DS
+    LANgw --> DS
+    DS --> LANgw
     DS --> EP
 
     %% HA Sync between SBCs
-    A_HA <-->|"Heartbeat<br/>State Sync"| S_HA
+    A_HA -->|"Heartbeat<br/>State Sync"| S_HA
+    S_HA -->|"Heartbeat<br/>State Sync"| A_HA
     A_HA --- VIP
     S_HA --- VIP
 
