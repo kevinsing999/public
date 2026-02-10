@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page.title | default: site.title }}</title>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/github-markdown-css/5.5.1/github-markdown.min.css">
+    <style>
+        body {
+            background-color: #0d1117;
+            color: #e6edf3;
+        }
+        .markdown-body {
+            box-sizing: border-box;
+            min-width: 200px;
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 45px;
+            background-color: #0d1117;
+            color: #e6edf3;
+        }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3,
+        .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+            color: #e6edf3;
+            border-bottom-color: #30363d;
+        }
+        .markdown-body a { color: #58a6ff; }
+        .markdown-body table { display: table; width: 100%; }
+        .markdown-body table th, .markdown-body table td {
+            border-color: #30363d;
+            background-color: #161b22;
+        }
+        .markdown-body table th { background-color: #1c2128; }
+        .markdown-body table tr:nth-child(2n) td { background-color: #1c2128; }
+        .markdown-body hr { background-color: #30363d; }
+        .markdown-body blockquote {
+            color: #8b949e;
+            border-left-color: #30363d;
+        }
+        .markdown-body code {
+            background-color: #282c34;
+            color: #e6edf3;
+        }
+        .markdown-body pre {
+            background-color: #161b22;
+        }
+        .markdown-body pre code {
+            background-color: transparent;
+        }
+        .mermaid {
+            background-color: #ffffff;
+            border-radius: 8px;
+            padding: 16px;
+            margin: 16px 0;
+            text-align: center;
+        }
+        @media (max-width: 767px) {
+            .markdown-body { padding: 15px; }
+        }
+    </style>
+</head>
+<body>
+    <article class="markdown-body">
+        {{ content }}
+    </article>
+
+    <script type="module">
+        import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs';
+
+        mermaid.initialize({
+            startOnLoad: false,
+            theme: 'default',
+            securityLevel: 'loose',
+            flowchart: { htmlLabels: true, curve: 'basis' },
+            sequence: { useMaxWidth: true }
+        });
+
+        // Jekyll renders ```mermaid blocks as <pre><code class="language-mermaid">
+        const codeBlocks = document.querySelectorAll('code.language-mermaid');
+        codeBlocks.forEach((block, index) => {
+            const pre = block.parentElement;
+            const div = document.createElement('div');
+            div.className = 'mermaid';
+            div.textContent = block.textContent;
+            pre.parentElement.replaceChild(div, pre);
+        });
+
+        await mermaid.run();
+    </script>
+</body>
+</html>

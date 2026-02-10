@@ -1,3 +1,8 @@
+---
+layout: default
+title: AudioCodes SBC - Unified Deployment & Configuration Guide
+---
+
 # AudioCodes SBC - Unified Deployment & Configuration Guide
 
 ## Cloud Operations & Voice Engineering Reference Document
