@@ -3311,18 +3311,21 @@ flowchart TB
     end
 
     subgraph CorpWAN["CORPORATE WAN / DIRECT CONNECT"]
+        SIPProvider["REGIONAL SIP PROVIDER<br/><br/>- PSTN Termination<br/>- SIP Trunking"]
         DownstreamSBC1["DOWNSTREAM SBC<br/>(Branch Site)<br/><br/>- Endpoints<br/>- IP Phones"]
         DownstreamSBC2["DOWNSTREAM SBC<br/>with LBO<br/><br/>- Endpoints<br/>- Local PSTN"]
         ThirdPartyPBX["3RD PARTY PBX<br/>/ Radio System<br/><br/>Local PSTN"]
     end
 
-    Teams -->|"TLS 5061 (Signaling)<br/>UDP 3478-3481, 49152-53247 (Media)"| ProxySBC
+    Teams -->|"TLS 5061 (Signalling)<br/>UDP 3478-3481, 49152-53247 (Media)"| ProxySBC
     M365 <-->|"HTTPS 443<br/>OVOC - MS: API queries<br/>MS - OVOC: Webhook notifications"| OVOC
 
     StackMgr --> ProxySBC
     ARMConfig --> ProxySBC
     ARMRouter --> ProxySBC
     OVOC --> ProxySBC
+
+    ProxySBC <-->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| SIPProvider
 
     ARMConfig -->|"HTTPS 443"| DownstreamSBC1
     ARMConfig -->|"HTTPS 443"| DownstreamSBC2
