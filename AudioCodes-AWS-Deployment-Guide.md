@@ -3967,43 +3967,41 @@ flowchart TB
 title: ARM Configurator - Interface Architecture (AWS Instance: m4.xlarge)
 ---
 flowchart TB
-    subgraph configurator["ARM CONFIGURATOR"]
-        subgraph net_interface["NETWORK INTERFACE (Single ENI)"]
-            eth0["eth0"] --> primary_eni["Primary ENI"]
-            primary_eni --> mgmt_subnet["Management/Internal Subnet"]
-            mgmt_subnet --> ip_addr["IP: X.X.X.X"]
+    subgraph cfg["ARM CONFIGURATOR"]
+        subgraph cfg_net["NETWORK INTERFACE (Single ENI)"]
+            cfg_eth["eth0 → Primary ENI → Management/Internal Subnet<br/>IP: X.X.X.X"]
         end
 
-        subgraph services["SERVICES"]
-            subgraph inbound["Inbound"]
-                in_https["TCP 443 - HTTPS Web UI<br/>(Admin Access with OAuth)"]
-                in_ssh["TCP 22 - SSH<br/>(Admin Access)"]
-                in_api["TCP 443 - REST API<br/>(Service-to-Service Auth)"]
-                in_router["TCP 443 - ARM Router Registration"]
+        subgraph cfg_svc["SERVICES"]
+            subgraph cfg_in["Inbound"]
+                cfg_in_https["TCP 443 - HTTPS Web UI<br/>(Admin Access with OAuth)"]
+                cfg_in_ssh["TCP 22 - SSH<br/>(Admin Access)"]
+                cfg_in_api["TCP 443 - REST API<br/>(Service-to-Service Auth)"]
+                cfg_in_router["TCP 443 - ARM Router Registration"]
             end
 
-            subgraph outbound["Outbound"]
-                out_sbc["TCP 443 - SBC Configuration Push<br/>(HTTPS to all SBCs)"]
-                out_router["TCP 443 - ARM Router Communication"]
-                out_oauth["TCP 443 - login.microsoftonline.com<br/>(OAuth)"]
-                out_graph["TCP 443 - graph.microsoft.com<br/>(User/Group info for RBAC)"]
-                out_ldap["TCP 636 - LDAP Server<br/>(if using LDAP authentication)"]
+            subgraph cfg_out["Outbound"]
+                cfg_out_sbc["TCP 443 - SBC Configuration Push<br/>(HTTPS to all SBCs)"]
+                cfg_out_router["TCP 443 - ARM Router Communication"]
+                cfg_out_oauth["TCP 443 - login.microsoftonline.com<br/>(OAuth)"]
+                cfg_out_graph["TCP 443 - graph.microsoft.com<br/>(User/Group info for RBAC)"]
+                cfg_out_ldap["TCP 636 - LDAP Server<br/>(if using LDAP authentication)"]
             end
         end
     end
 
     %% External connections - Inbound
-    admin_users(["Admin Users"]) --> in_https
-    admin_users --> in_ssh
-    ext_services(["External Services"]) --> in_api
-    arm_router_ext(["ARM Router"]) --> in_router
+    cfg_admin(["Admin Users"]) --> cfg_in_https
+    cfg_admin --> cfg_in_ssh
+    cfg_ext_svc(["External Services"]) --> cfg_in_api
+    cfg_arm_router(["ARM Router"]) --> cfg_in_router
 
     %% External connections - Outbound
-    out_sbc --> sbc_devices(["SBC Devices"])
-    out_router --> arm_router_out(["ARM Router"])
-    out_oauth --> ms_login(["Microsoft Login"])
-    out_graph --> ms_graph(["Microsoft Graph"])
-    out_ldap --> ldap_server(["LDAP Server"])
+    cfg_out_sbc --> cfg_sbc_dev(["SBC Devices"])
+    cfg_out_router --> cfg_arm_rtr_out(["ARM Router"])
+    cfg_out_oauth --> cfg_ms_login(["Microsoft Login"])
+    cfg_out_graph --> cfg_ms_graph(["Microsoft Graph"])
+    cfg_out_ldap --> cfg_ldap_srv(["LDAP Server"])
 
     %% Styling
     classDef headerStyle fill:#1a5276,stroke:#154360,color:#fff
@@ -4012,11 +4010,11 @@ flowchart TB
     classDef outboundStyle fill:#e67e22,stroke:#d35400,color:#fff
     classDef externalStyle fill:#7f8c8d,stroke:#566573,color:#fff
 
-    class configurator headerStyle
-    class net_interface,eth0,primary_eni,mgmt_subnet,ip_addr networkStyle
-    class inbound,in_https,in_ssh,in_api,in_router inboundStyle
-    class outbound,out_sbc,out_router,out_oauth,out_graph,out_ldap outboundStyle
-    class admin_users,ext_services,arm_router_ext,sbc_devices,arm_router_out,ms_login,ms_graph,ldap_server externalStyle
+    class cfg headerStyle
+    class cfg_net,cfg_eth networkStyle
+    class cfg_in,cfg_in_https,cfg_in_ssh,cfg_in_api,cfg_in_router inboundStyle
+    class cfg_out,cfg_out_sbc,cfg_out_router,cfg_out_oauth,cfg_out_graph,cfg_out_ldap outboundStyle
+    class cfg_admin,cfg_ext_svc,cfg_arm_router,cfg_sbc_dev,cfg_arm_rtr_out,cfg_ms_login,cfg_ms_graph,cfg_ldap_srv externalStyle
 ```
 
 ```mermaid
@@ -4024,39 +4022,37 @@ flowchart TB
 title: ARM Router - Interface Architecture (AWS Instance: m4.large, One per Region)
 ---
 flowchart TB
-    subgraph router["ARM ROUTER"]
-        subgraph net_interface["NETWORK INTERFACE (Single ENI)"]
-            eth0["eth0"] --> primary_eni["Primary ENI"]
-            primary_eni --> mgmt_subnet["Management/Internal Subnet"]
-            mgmt_subnet --> ip_addr["IP: X.X.X.X"]
+    subgraph rtr["ARM ROUTER"]
+        subgraph rtr_net["NETWORK INTERFACE (Single ENI)"]
+            rtr_eth["eth0 → Primary ENI → Management/Internal Subnet<br/>IP: X.X.X.X"]
         end
 
-        subgraph services["SERVICES"]
-            subgraph inbound["Inbound"]
-                in_sbc["TCP 443 - SBC Routing Queries<br/>(Real-time routing decisions)"]
-                in_ssh["TCP 22 - SSH<br/>(Admin Access)"]
-                in_config["TCP 443 - ARM Configurator Sync"]
+        subgraph rtr_svc["SERVICES"]
+            subgraph rtr_in["Inbound"]
+                rtr_in_sbc["TCP 443 - SBC Routing Queries<br/>(Real-time routing decisions)"]
+                rtr_in_ssh["TCP 22 - SSH<br/>(Admin Access)"]
+                rtr_in_config["TCP 443 - ARM Configurator Sync"]
             end
 
-            subgraph outbound["Outbound"]
-                out_config["TCP 443 - ARM Configurator<br/>(Policy sync, registration)"]
-                out_sbc["TCP 443 - SBC Query Response"]
-                out_redis["TCP 6379 - Other ARM Routers<br/>(if clustered - Redis)"]
-                out_inter["TCP 8080 - Inter-Router Communication"]
+            subgraph rtr_out["Outbound"]
+                rtr_out_config["TCP 443 - ARM Configurator<br/>(Policy sync, registration)"]
+                rtr_out_sbc["TCP 443 - SBC Query Response"]
+                rtr_out_redis["TCP 6379 - Other ARM Routers<br/>(if clustered - Redis)"]
+                rtr_out_inter["TCP 8080 - Inter-Router Communication"]
             end
         end
     end
 
     %% External connections - Inbound
-    sbc_devices(["SBC Devices"]) --> in_sbc
-    admin_users(["Admin Users"]) --> in_ssh
-    arm_configurator_in(["ARM Configurator"]) --> in_config
+    rtr_sbc_dev(["SBC Devices"]) --> rtr_in_sbc
+    rtr_admin(["Admin Users"]) --> rtr_in_ssh
+    rtr_cfg_in(["ARM Configurator"]) --> rtr_in_config
 
     %% External connections - Outbound
-    out_config --> arm_configurator_out(["ARM Configurator"])
-    out_sbc --> sbc_response(["SBC Devices"])
-    out_redis --> other_routers(["Other ARM Routers"])
-    out_inter --> router_cluster(["Router Cluster"])
+    rtr_out_config --> rtr_cfg_out(["ARM Configurator"])
+    rtr_out_sbc --> rtr_sbc_resp(["SBC Devices"])
+    rtr_out_redis --> rtr_other(["Other ARM Routers"])
+    rtr_out_inter --> rtr_cluster(["Router Cluster"])
 
     %% Styling
     classDef headerStyle fill:#1a5276,stroke:#154360,color:#fff
@@ -4065,11 +4061,11 @@ flowchart TB
     classDef outboundStyle fill:#e67e22,stroke:#d35400,color:#fff
     classDef externalStyle fill:#7f8c8d,stroke:#566573,color:#fff
 
-    class router headerStyle
-    class net_interface,eth0,primary_eni,mgmt_subnet,ip_addr networkStyle
-    class inbound,in_sbc,in_ssh,in_config inboundStyle
-    class outbound,out_config,out_sbc,out_redis,out_inter outboundStyle
-    class admin_users,sbc_devices,arm_configurator_in,arm_configurator_out,sbc_response,other_routers,router_cluster externalStyle
+    class rtr headerStyle
+    class rtr_net,rtr_eth networkStyle
+    class rtr_in,rtr_in_sbc,rtr_in_ssh,rtr_in_config inboundStyle
+    class rtr_out,rtr_out_config,rtr_out_sbc,rtr_out_redis,rtr_out_inter outboundStyle
+    class rtr_admin,rtr_sbc_dev,rtr_cfg_in,rtr_cfg_out,rtr_sbc_resp,rtr_other,rtr_cluster externalStyle
 ```
 
 #### D.8.6 Stack Manager - Interface Architecture
