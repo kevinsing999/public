@@ -1,0 +1,93 @@
+%%{init: {'theme': 'default'}}%%
+%% D.8.7 Complete Solution - Simplified Version
+%% AudioCodes SBC Architecture
+
+flowchart TB
+    %% Internet Layer
+    subgraph Cloud["☁️ Internet / Cloud"]
+        Teams["Microsoft Teams<br/>Direct Routing"]
+        M365["Microsoft 365<br/>Graph API"]
+        SIPAU["SIP Provider AU"]
+        SIPUS["SIP Provider US"]
+    end
+
+    %% Australia VPC
+    subgraph AUVPC["🔶 AWS Australia"]
+        subgraph AUProxy["AU Proxy SBC HA"]
+            AUActive["Active"]
+            AUStandby["Standby"]
+        end
+        subgraph AUMgmt["Management"]
+            StackMgr["Stack Manager"]
+            OVOC["OVOC"]
+            ARM["ARM"]
+        end
+    end
+
+    %% US VPC
+    subgraph USVPC["🔶 AWS US"]
+        subgraph USProxy["US Proxy SBC HA"]
+            USActive["Active"]
+            USStandby["Standby"]
+        end
+        USStack["Stack Manager"]
+        ARMUS["ARM Router"]
+    end
+
+    %% On-Premises
+    subgraph OnPrem["🏢 On-Premises"]
+        DSSBC["Downstream SBC"]
+        DSLBO["Downstream SBC<br/>+ LBO"]
+        PBX["3rd Party PBX"]
+        AD["Active Directory"]
+        subgraph EP["Endpoints"]
+            Phones["IP Phones"]
+            Soft["Softphones"]
+        end
+    end
+
+    %% Cloud to AWS Connections
+    Teams -->|"TLS 5061"| AUActive
+    M365 <-->|"HTTPS 443"| OVOC
+    SIPAU -->|"UDP 5060"| AUActive
+    SIPUS -->|"UDP 5060"| USActive
+
+    %% HA Connections
+    AUActive <--> AUStandby
+    USActive <--> USStandby
+
+    %% Cross-Region
+    AUActive <-->|"Proxy-to-Proxy"| USActive
+
+    %% Management
+    StackMgr --> AUActive
+    OVOC --> AUActive
+    ARM --> AUActive
+    USStack --> USActive
+    ARMUS --> USActive
+
+    %% AWS to On-Prem
+    AUActive <-->|"UDP 5060"| DSSBC
+    AUActive <-->|"UDP 5060"| DSLBO
+    AUActive <-->|"UDP 5060"| PBX
+
+    %% On-Prem Internal
+    DSSBC <-->|"LDAPS"| AD
+    DSLBO <-->|"LDAPS"| AD
+    DSSBC --> Phones
+    DSSBC --> Soft
+    DSLBO --> Phones
+
+    %% Styling
+    classDef cloud fill:#4285f4,stroke:#1a73e8,color:#fff
+    classDef aws fill:#ff9900,stroke:#cc7a00,color:#000
+    classDef sbc fill:#34a853,stroke:#1e7e34,color:#fff
+    classDef mgmt fill:#9c27b0,stroke:#6a1b9a,color:#fff
+    classDef onprem fill:#616161,stroke:#424242,color:#fff
+    classDef endpoint fill:#03a9f4,stroke:#0288d1,color:#fff
+
+    class Teams,M365,SIPAU,SIPUS cloud
+    class AUActive,AUStandby,USActive,USStandby sbc
+    class StackMgr,OVOC,ARM,USStack,ARMUS mgmt
+    class DSSBC,DSLBO,PBX,AD onprem
+    class Phones,Soft endpoint

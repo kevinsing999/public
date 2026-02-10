@@ -1,0 +1,189 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f4f4f4', 'primaryTextColor': '#333', 'primaryBorderColor': '#333', 'lineColor': '#666', 'secondaryColor': '#f4f4f4', 'tertiaryColor': '#fff'}}}%%
+%% ============================================================
+%% D.8.7 Complete Solution - End-to-End Connectivity
+%% AudioCodes SBC Unified Deployment Architecture
+%% ============================================================
+
+flowchart TB
+    %% ============================================================
+    %% INTERNET / CLOUD LAYER
+    %% ============================================================
+    subgraph Internet["☁️ INTERNET / CLOUD"]
+        direction LR
+
+        subgraph MSTeams["Microsoft Teams Direct Routing"]
+            Teams["Microsoft Teams<br/>52.112.0.0/14<br/>52.120.0.0/14<br/>52.122.0.0/15"]
+        end
+
+        subgraph M365["Microsoft 365"]
+            GraphAPI["Graph API<br/>graph.microsoft.com"]
+            LoginAPI["Azure AD<br/>login.microsoftonline.com"]
+        end
+
+        SIPAU["SIP Provider AU<br/>Australian PSTN Carrier"]
+        SIPUS["SIP Provider US<br/>US PSTN Carrier"]
+    end
+
+    %% ============================================================
+    %% AWS VPC - AUSTRALIA REGION
+    %% ============================================================
+    subgraph AWSAustralia["🔶 AWS VPC - AUSTRALIA (ap-southeast-2)"]
+        direction TB
+
+        subgraph ProxySBC["Proxy SBC HA Pair"]
+            direction LR
+            AUActive["🟢 Active<br/>(AZ-A)"]
+            AUStandby["🔵 Standby<br/>(AZ-B)"]
+            HAVIP["HA Subnet<br/>169.254.64.x VIP"]
+        end
+
+        subgraph ProxyInterfaces["Interfaces"]
+            ExtIF["External (WAN)<br/>TLS 5061 | SRTP 20000-29999"]
+            IntIF["Internal (LAN)<br/>UDP 5060 | RTP 6000-49999"]
+        end
+
+        subgraph MgmtZone["⚙️ Management Zone"]
+            direction LR
+            StackMgr["Stack Manager<br/>t3.medium<br/>AWS APIs"]
+            OVOC["OVOC<br/>m5.4xlarge<br/>SNMP 162 | QoE 5001"]
+            ARMCfg["ARM Configurator<br/>m4.xlarge<br/>OAuth | REST API"]
+            ARMRtrAU["ARM Router AU<br/>m4.large"]
+        end
+    end
+
+    %% ============================================================
+    %% AWS VPC - US REGION
+    %% ============================================================
+    subgraph AWSUSRegion["🔶 AWS VPC - US (us-east-1)"]
+        direction TB
+
+        subgraph USProxySBC["US Proxy SBC HA Pair"]
+            direction LR
+            USActive["🟢 Active<br/>(AZ-A)"]
+            USStandby["🔵 Standby<br/>(AZ-B)"]
+        end
+
+        subgraph USMgmt["US Management"]
+            direction LR
+            USStackMgr["Stack Manager<br/>t3.medium"]
+            ARMRtrUS["ARM Router US<br/>m4.large"]
+        end
+    end
+
+    %% ============================================================
+    %% ON-PREMISES
+    %% ============================================================
+    subgraph OnPrem["🏢 ON-PREMISES (via Direct Connect)"]
+        direction TB
+
+        subgraph DownstreamSBCs["Downstream SBCs"]
+            direction LR
+            DSSBC["Downstream SBC<br/>Mediant 800<br/>Branch Sites"]
+            DSSBCLBO["Downstream SBC<br/>with LBO<br/>Local PSTN Breakout"]
+        end
+
+        subgraph ThirdParty["3rd Party Systems"]
+            direction LR
+            PBX["Legacy PBX"]
+            Radio["Radio/Emergency<br/>Systems"]
+            AnalogGW["Analog<br/>Gateways"]
+        end
+
+        subgraph Infrastructure["Infrastructure"]
+            direction LR
+            AD["Active Directory<br/>Domain Controllers"]
+            LocalPSTN["Local PSTN<br/>Provider"]
+        end
+
+        subgraph Endpoints["📱 Registered Endpoints"]
+            direction LR
+            IPPhones["IP Phones<br/>AudioCodes/Poly/Yealink"]
+            SoftClients["SIP Soft<br/>Clients"]
+            ConfRooms["Conference<br/>Room Devices"]
+        end
+    end
+
+    %% ============================================================
+    %% CONNECTIONS - Internet to AWS
+    %% ============================================================
+    Teams -->|"TLS 5061<br/>SRTP"| ExtIF
+    GraphAPI <-->|"HTTPS 443<br/>Webhooks"| OVOC
+    LoginAPI -->|"OAuth 443"| OVOC
+    LoginAPI -->|"OAuth 443"| ARMCfg
+    SIPAU -->|"UDP 5060<br/>RTP"| IntIF
+    SIPUS -->|"UDP 5060<br/>RTP"| USActive
+
+    %% ============================================================
+    %% CONNECTIONS - AWS Internal
+    %% ============================================================
+    AUActive <-->|"HA Heartbeat"| HAVIP
+    AUStandby <-->|"HA Heartbeat"| HAVIP
+    AUActive --- ExtIF
+    AUActive --- IntIF
+
+    StackMgr -->|"CloudFormation"| AUActive
+    StackMgr -->|"CloudFormation"| AUStandby
+    OVOC -->|"SNMP/QoE"| AUActive
+    ARMCfg -->|"HTTPS 443"| ARMRtrAU
+    ARMRtrAU -->|"Routing"| AUActive
+
+    USStackMgr --> USActive
+    USStackMgr --> USStandby
+    ARMRtrUS --> USActive
+
+    %% ============================================================
+    %% CONNECTIONS - Proxy to Proxy (Cross-Region)
+    %% ============================================================
+    AUActive <-->|"Proxy-to-Proxy<br/>TCP 5060"| USActive
+
+    %% ============================================================
+    %% CONNECTIONS - AWS to On-Premises
+    %% ============================================================
+    IntIF <-->|"UDP 5060<br/>RTP 10000-19999"| DSSBC
+    IntIF <-->|"UDP 5060<br/>RTP 10000-19999"| DSSBCLBO
+    IntIF <-->|"UDP 5060"| PBX
+    IntIF <-->|"UDP 5060"| Radio
+
+    %% ============================================================
+    %% CONNECTIONS - On-Premises Internal
+    %% ============================================================
+    DSSBCLBO -->|"SIP Trunk"| LocalPSTN
+    DSSBC <-->|"LDAPS 636"| AD
+    DSSBCLBO <-->|"LDAPS 636"| AD
+
+    DSSBC -->|"SIP 5060-5069<br/>RTP"| IPPhones
+    DSSBC --> SoftClients
+    DSSBC --> ConfRooms
+    DSSBCLBO --> IPPhones
+
+    %% ============================================================
+    %% CONNECTIONS - Management to All SBCs
+    %% ============================================================
+    OVOC -.->|"HTTPS 443"| DSSBC
+    OVOC -.->|"HTTPS 443"| DSSBCLBO
+    OVOC -.->|"HTTPS 443"| USActive
+    ARMCfg -.->|"Config Push"| DSSBC
+    ARMCfg -.->|"Config Push"| DSSBCLBO
+
+    %% ============================================================
+    %% STYLING - Class Definitions
+    %% ============================================================
+    classDef internet fill:#1a73e8,stroke:#0d47a1,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef aws fill:#ff9900,stroke:#cc7a00,stroke-width:2px,color:#000000,font-weight:bold
+    classDef sbc fill:#34a853,stroke:#1e7e34,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef management fill:#9c27b0,stroke:#6a1b9a,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef onprem fill:#757575,stroke:#424242,stroke-width:2px,color:#ffffff,font-weight:bold
+    classDef endpoints fill:#81d4fa,stroke:#0288d1,stroke-width:2px,color:#000000,font-weight:bold
+    classDef ha fill:#4caf50,stroke:#2e7d32,stroke-width:2px,color:#ffffff
+    classDef interface fill:#ffeb3b,stroke:#f57f17,stroke-width:2px,color:#000000
+
+    %% ============================================================
+    %% STYLING - Class Assignments
+    %% ============================================================
+    class Teams,GraphAPI,LoginAPI,SIPAU,SIPUS internet
+    class AUActive,AUStandby,USActive,USStandby sbc
+    class StackMgr,OVOC,ARMCfg,ARMRtrAU,USStackMgr,ARMRtrUS management
+    class DSSBC,DSSBCLBO,PBX,Radio,AnalogGW,AD,LocalPSTN onprem
+    class IPPhones,SoftClients,ConfRooms endpoints
+    class HAVIP ha
+    class ExtIF,IntIF interface
