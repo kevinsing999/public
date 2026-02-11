@@ -94,6 +94,9 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 
 **Key Point:** The SBCs themselves handle HA switchover by communicating directly with AWS APIs. The Stack Manager is used for initial deployment only and does not participate in active failover.
 
+![Diagram 1](svg-diagrams/01-how-the-failover-mechanism-works.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph VPC["AWS VPC (Single Region)"]
@@ -134,6 +137,7 @@ flowchart TB
     style RT_Arrow fill:#fff3e0,stroke:#e65100
     style RT_After fill:#fff3e0,stroke:#e65100
 ```
+-->
 
 ### HA Scope Clarification
 
@@ -168,6 +172,9 @@ The SBCs require **internet access from the HA subnet** to communicate with AWS 
 
 ### Non-Production Environment (Australia Region Only)
 
+![Diagram 2](svg-diagrams/02-non-production-environment-australia-region-only.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph NONPROD["NON-PRODUCTION AWS ACCOUNT"]
@@ -196,6 +203,7 @@ flowchart TB
     style ARM_CFG_NP fill:#ffe0b2,stroke:#ef6c00
     style ARM_RTR_NP fill:#ffe0b2,stroke:#ef6c00
 ```
+-->
 
 **Total VMs: 5**
 - 2x SBC (HA pair)
@@ -205,6 +213,9 @@ flowchart TB
 
 ### Production Environment
 
+![Diagram 3](svg-diagrams/03-production-environment.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph PROD["PRODUCTION AWS ACCOUNT"]
@@ -249,6 +260,7 @@ flowchart TB
     style ARM_RTR_AUS fill:#ffe0b2,stroke:#ef6c00
     style ARM_RTR_US fill:#f8bbd9,stroke:#c2185b
 ```
+-->
 
 **Total AUS VMs: 6**
 - 2x SBC (HA pair)
@@ -407,6 +419,9 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
 
 ### Subnet Design
 
+![Diagram 4](svg-diagrams/04-subnet-design.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph VIP["Virtual IP Range: 169.254.64.0/24<br/>(Outside VPC CIDR)"]
@@ -448,6 +463,7 @@ flowchart TB
     style HAB fill:#ffe6e6,stroke:#cc0000,stroke-width:2px
     style VIP fill:#f0e6ff,stroke:#9933ff,stroke-width:2px
 ```
+-->
 
 ### Security Groups
 
@@ -1063,6 +1079,9 @@ This section describes the authentication architecture for SBC management access
 
 #### Authentication Architecture Overview
 
+![Diagram 5](svg-diagrams/05-authentication-architecture-overview.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph cloud["CLOUD (AWS)"]
@@ -1090,6 +1109,7 @@ flowchart TB
     style downstream fill:#ffcc99,stroke:#cc6600,stroke-width:2px
     style ad fill:#ff9933,stroke:#cc6600,stroke-width:2px,color:#fff
 ```
+-->
 
 **Rationale for Unified On-Premises AD Authentication:**
 
@@ -2265,6 +2285,9 @@ Store break glass credentials in a secure, access-controlled secret repository o
 
 ### 8-Phase Deployment Sequence
 
+![Diagram 6](svg-diagrams/06-8-phase-deployment-sequence.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph Phase1["Phase 1: Infrastructure Preparation"]
@@ -2357,6 +2380,7 @@ flowchart TB
     Phase6 --> Phase7
     Phase7 --> Phase8
 ```
+-->
 
 ### Deployment Methods by Component
 
@@ -2447,6 +2471,9 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 - The provider does not initiate connections to the SBC - the SBC maintains the registration
 - Failover is transparent to the provider - the new Active SBC re-registers and resumes the connection
 
+![Diagram 7](svg-diagrams/07-concept-overview.svg)
+
+<!--
 ```mermaid
 flowchart LR
     subgraph SBC["Your HA SBC Pair"]
@@ -2461,9 +2488,13 @@ flowchart LR
 
     SBC -->|"Single IP (VIP/EIP)<br/>Outbound Registration"| Provider
 ```
+-->
 
 **How the VIP Works**
 
+![Diagram 8](svg-diagrams/08-concept-overview.svg)
+
+<!--
 ```mermaid
 flowchart TB
     VIP["Virtual IP<br/>169.254.64.x"]
@@ -2481,6 +2512,7 @@ flowchart TB
     RouteTable -->|"Route points to Active SBC"| SBC1
     RouteTable -.->|"On failover: Route updated<br/>to point to SBC #2's ENI"| SBC2
 ```
+-->
 
 
 #### Traffic Types and Failover Mechanisms
@@ -2525,6 +2557,9 @@ Understanding what happens during failover helps set expectations with your regi
 
 The following diagram shows how different entities connect to the HA Proxy SBC pair, distinguishing between external (internet-facing) and internal (private network) connectivity. Note that each region (Australia/US) has its own Proxy SBC pair with regional SIP provider connectivity for PSTN breakout:
 
+![Diagram 9](svg-diagrams/09-ha-connectivity-architecture-diagram.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph INTERNET["INTERNET - EXTERNAL CONNECTIVITY (Via Elastic IP - Public)"]
@@ -2575,6 +2610,7 @@ flowchart TB
     RouteNote -.-> SBC1
     RouteNote -.->|"after failover"| SBC2
 ```
+-->
 
 #### Connectivity Summary by Entity Type
 
@@ -2627,6 +2663,9 @@ When deploying SBCs with Microsoft Teams Direct Routing, organisations using exi
 
 #### Option 1: Keep Internal Media as RTP (Unencrypted)
 
+![Diagram 10](svg-diagrams/10-option-1-keep-internal-media-as-rtp-unencrypted.svg)
+
+<!--
 ```mermaid
 flowchart LR
     subgraph Encrypted["Encrypted (SRTP)"]
@@ -2664,6 +2703,7 @@ flowchart LR
     class ProxySBC,DownstreamSBC,IPPhones unencrypted
     class Recorder recorder
 ```
+-->
 
 | Pros | Cons |
 |------|------|
@@ -2677,6 +2717,9 @@ flowchart LR
 
 If the existing voice recorder supports SIPREC (such as Eventide NexLog 740/840, Verint, NICE, Red Box, ASC), this is the recommended approach.
 
+![Diagram 11](svg-diagrams/11-option-2-sbc-based-recording-via-siprec-recommended.svg)
+
+<!--
 ```mermaid
 flowchart LR
     subgraph Encrypted["End-to-End Encrypted (SRTP)"]
@@ -2708,6 +2751,7 @@ flowchart LR
     class Teams,ProxySBC,DownstreamSBC,IPPhones encrypted
     class Recorder recorder
 ```
+-->
 
 | Pros | Cons |
 |------|------|
@@ -3282,6 +3326,9 @@ This appendix provides visual representations of all network flows in the AudioC
 
 ### D.1 High-Level Architecture Overview
 
+![Diagram 12](svg-diagrams/12-d1-high-level-architecture-overview.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph Internet["INTERNET / CLOUD"]
@@ -3334,11 +3381,15 @@ flowchart TB
 
     DownstreamSBC2 -->|"Local PSTN"| ThirdPartyPBX
 ```
+-->
 
 ---
 
 ### D.2 SIP Signalling Flows
 
+![Diagram 13](svg-diagrams/13-d2-sip-signalling-flows.svg)
+
+<!--
 ```mermaid
 flowchart LR
     subgraph external["EXTERNAL (TLS Encrypted)"]
@@ -3397,11 +3448,15 @@ flowchart LR
     %% LBO to local PSTN
     DownstreamLBO -->|"UDP 5060<br/>(SBC initiates)"| LocalProvider
 ```
+-->
 
 ---
 
 ### D.3 Media (RTP/SRTP) Flows
 
+![Diagram 14](svg-diagrams/14-d3-media-rtpsrtp-flows.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph LEGEND["Legend"]
@@ -3486,11 +3541,15 @@ flowchart TB
     class TEAMS,TEAMS_LMO external
     class PROXY,DOWNSTREAM,DOWNSTREAM_LBO sbc
 ```
+-->
 
 ---
 
 ### D.4 Management & Monitoring Flows
 
+![Diagram 15](svg-diagrams/15-d4-management-monitoring-flows.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph title[" "]
@@ -3575,6 +3634,7 @@ flowchart TB
     style adminAccess fill:#e8f5e9,stroke:#4CAF50,stroke-width:2px
     style infraServices fill:#fce4ec,stroke:#E91E63,stroke-width:2px
 ```
+-->
 
 > **IMPORTANT:** OVOC must be reachable from Microsoft 365 IPs on TCP 443 for webhooks
 
@@ -3584,6 +3644,9 @@ flowchart TB
 
 #### Example 1: Teams User to PSTN (via Proxy SBC)
 
+![Diagram 16](svg-diagrams/16-example-1-teams-user-to-pstn-via-proxy-sbc.svg)
+
+<!--
 ```mermaid
 sequenceDiagram
     participant TU as Teams User
@@ -3609,9 +3672,13 @@ sequenceDiagram
     PP->>PU: RTP (Unencrypted)
     PU->>PP: RTP (Unencrypted)
 ```
+-->
 
 #### Example 2: PSTN to Downstream SBC Endpoint
 
+![Diagram 17](svg-diagrams/17-example-2-pstn-to-downstream-sbc-endpoint.svg)
+
+<!--
 ```mermaid
 sequenceDiagram
     participant PU as PSTN User
@@ -3634,6 +3701,7 @@ sequenceDiagram
     DS->>SE: RTP (Unencrypted)
     SE->>DS: RTP (Unencrypted)
 ```
+-->
 
 ---
 
@@ -3683,6 +3751,9 @@ This section provides detailed low-level interface mappings for all AudioCodes a
 
 #### D.8.1 Proxy SBC (AWS) - Complete Interface Architecture
 
+![Diagram 18](svg-diagrams/18-d81-proxy-sbc-aws-complete-interface-architecture.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph PROXY_SBC["PROXY SBC (Mediant VE - AWS)<br/>Instance Type: m5n.large"]
@@ -3762,9 +3833,13 @@ flowchart TB
     SIP0 -.-> IPG6
     SIP0 -.-> IPG7
 ```
+-->
 
 #### D.8.2 Downstream SBC (On-Premises Mediant 800) - Complete Interface Architecture
 
+![Diagram 19](svg-diagrams/19-d82-downstream-sbc-on-premises-mediant-800-complete-interface-architecture.svg)
+
+<!--
 ```mermaid
 %%{init: {'theme': 'default'}}%%
 %% D.8.2 - Downstream SBC (On-Premises Mediant 800) - Complete Interface Architecture
@@ -3829,9 +3904,13 @@ flowchart TB
     class SIP0 sipif
     class IPG1,IPG2 groups
 ```
+-->
 
 #### D.8.3 Downstream SBC with Local Breakout (LBO) - Complete Interface Architecture
 
+![Diagram 20](svg-diagrams/20-d83-downstream-sbc-with-local-breakout-lbo-complete-interface-architecture.svg)
+
+<!--
 ```mermaid
 %%{init: {'theme': 'default'}}%%
 %% D.8.3 - Downstream SBC with Local Breakout (LBO) - Complete Interface Architecture
@@ -3897,9 +3976,13 @@ flowchart TB
     class IPG1,IPG2 groups
     class IPG3 pstn
 ```
+-->
 
 #### D.8.4 OVOC - Interface Architecture
 
+![Diagram 21](svg-diagrams/21-d84-ovoc-interface-architecture.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph OVOC["OVOC (One Voice Operations Center)<br/>AWS Instance: m5.4xlarge"]
@@ -3957,9 +4040,13 @@ flowchart TB
     Outbound -->|TCP 636| LDAPServer(("LDAP"))
     Outbound -->|UDP 514/TCP 25| LogMail(("Syslog/Mail"))
 ```
+-->
 
 #### D.8.5 ARM (AudioCodes Routing Manager) - Interface Architecture
 
+![Diagram 22](svg-diagrams/22-d85-arm-audiocodes-routing-manager-interface-architecture.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph cfg["ARM CONFIGURATOR"]
@@ -4011,7 +4098,11 @@ flowchart TB
     class cfg_out,cfg_out_sbc,cfg_out_router,cfg_out_oauth,cfg_out_graph,cfg_out_ldap outboundStyle
     class cfg_admin,cfg_ext_svc,cfg_arm_router,cfg_sbc_dev,cfg_arm_rtr_out,cfg_ms_login,cfg_ms_graph,cfg_ldap_srv externalStyle
 ```
+-->
 
+![Diagram 23](svg-diagrams/23-d85-arm-audiocodes-routing-manager-interface-architecture.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph rtr["ARM ROUTER"]
@@ -4059,9 +4150,13 @@ flowchart TB
     class rtr_out,rtr_out_config,rtr_out_sbc,rtr_out_redis,rtr_out_inter outboundStyle
     class rtr_admin,rtr_sbc_dev,rtr_cfg_in,rtr_cfg_out,rtr_sbc_resp,rtr_other,rtr_cluster externalStyle
 ```
+-->
 
 #### D.8.6 Stack Manager - Interface Architecture
 
+![Diagram 24](svg-diagrams/24-d86-stack-manager-interface-architecture.svg)
+
+<!--
 ```mermaid
 flowchart TB
     subgraph SM["STACK MANAGER<br/>AWS Instance: t3.medium"]
@@ -4107,6 +4202,7 @@ flowchart TB
     style IAM fill:#fff8e1,stroke:#ff8f00
     style NOTE fill:#ffebee,stroke:#c62828,stroke-dasharray: 5 5
 ```
+-->
 
 #### D.8.7 Complete Solution - End-to-End Connectivity Map
 
@@ -4114,6 +4210,9 @@ flowchart TB
 
 The diagram below shows the SBC as a "gateway" device. Think of it like a security checkpoint at an airport - calls enter on one side, get inspected and processed, then exit on the other side to reach their destination.
 
+![Diagram 25](svg-diagrams/25-d87-complete-solution-end-to-end-connectivity-map.svg)
+
+<!--
 ```mermaid
 %%{init: {'theme': 'default'}}%%
 %% D.8.7 - Layman-Friendly View: SBC as a Gateway Device
@@ -4198,6 +4297,7 @@ flowchart LR
     class Process process
     class Downstream,Phones internal
 ```
+-->
 
 **Interface Summary (from D.8.8 Matrix):**
 
@@ -4218,6 +4318,9 @@ flowchart LR
 
 **Detailed Technical View: AWS Infrastructure & HA Failover**
 
+![Diagram 26](svg-diagrams/26-d87-complete-solution-end-to-end-connectivity-map.svg)
+
+<!--
 ```mermaid
 %%{init: {'theme': 'default'}}%%
 %% D.8.7 - Technical View: AWS Subnets and HA Mechanism
@@ -4336,6 +4439,7 @@ flowchart TB
     class EIP,LANgw subnet
     class DS,EP onprem
 ```
+-->
 
 **How HA Failover Works:**
 1. Both SBCs share a **Virtual IP (VIP)** address on the HA subnet
