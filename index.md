@@ -491,7 +491,7 @@ flowchart TB
 |-----------|----------|------|-------------------|---------|
 | Inbound | TCP | 22 | Admin CIDR | SSH |
 | Inbound | TCP | 443 | Admin CIDR | HTTPS Web UI |
-| Inbound | TCP | 443 | Reverse Proxy CIDR | Graph API Webhooks (via Palo Alto + AWS Reverse Proxy) |
+| Inbound | TCP | 443 | Reverse Proxy CIDR | Graph API Webhooks (via Cloud Firewall + Reverse Proxy) |
 | Inbound | UDP | 162 | SBC CIDR | SNMP Traps |
 | Inbound | UDP | 1161 | SBC CIDR | Keep-alive (NAT traversal) |
 | Inbound | TCP | 5001 | SBC CIDR | QoE Reporting |
@@ -510,7 +510,7 @@ The Proxy SBC uses a bespoke external publishing pattern for public-facing conne
 
 - **Dedicated Elastic IP (EIP):** Each Proxy SBC HA pair is assigned a dedicated Elastic IP address on the External (WAN) ENI. The EIP provides the public-facing IP address for SIP signalling (TLS 5061) and SRTP media (UDP 20000-29999). During HA failover, the EIP is automatically reassigned to the newly Active instance.
 - **AWS Security Group (Layer 4):** Traffic filtering is enforced at the AWS Security Group level using Layer 4 rules (protocol, port, source/destination CIDR). Security Groups act as a stateful firewall controlling inbound and outbound traffic to the External ENI. SIP and media traffic from Microsoft Teams and PSTN providers is permitted based on published IP ranges and port allocations.
-- **No Reverse Proxy or Firewall on External Side:** The SBC's WAN ENI is **not** behind a Palo Alto firewall or reverse proxy. SIP/TLS and SRTP/RTP protocols require direct IP connectivity between the SBC and external parties for proper NAT traversal, session persistence, and real-time media delivery. The SBC handles its own TLS termination, SIP message inspection, and media anchoring natively.
+- **No Reverse Proxy or Firewall on External Side:** The SBC's WAN ENI is **not** behind a cloud firewall or reverse proxy. SIP/TLS and SRTP/RTP protocols require direct IP connectivity between the SBC and external parties for proper NAT traversal, session persistence, and real-time media delivery. The SBC handles its own TLS termination, SIP message inspection, and media anchoring natively.
 
 **Design Rationale:**
 
@@ -519,28 +519,28 @@ The Proxy SBC uses a bespoke external publishing pattern for public-facing conne
 - Microsoft Teams Direct Routing expects the SBC FQDN to resolve directly to the SBC's public IP (EIP) for TLS certificate validation.
 - The SBC's built-in VoIP firewall provides application-layer (Layer 7) SIP message inspection, rate limiting, and classification in addition to the Layer 4 Security Group rules.
 
-#### OVOC — Traditional Ingress (Palo Alto + AWS Reverse Proxy)
+#### OVOC — Traditional Ingress (Cloud Firewall + Reverse Proxy)
 
-OVOC and other management components that require inbound HTTPS connectivity from the internet use the organisation's standard ingress pattern: Palo Alto firewall with AWS Reverse Proxy.
+OVOC and other management components that require inbound HTTPS connectivity from the internet use the organisation's standard ingress pattern: cloud firewall with reverse proxy.
 
 **Architecture:**
 
-- **Palo Alto Firewall:** Inbound traffic from the internet is inspected by the Palo Alto firewall, which provides Layer 7 application inspection, threat prevention, URL filtering, and SSL decryption capabilities.
-- **AWS Reverse Proxy:** Behind the Palo Alto firewall, an AWS reverse proxy terminates and forwards HTTPS requests to the internal OVOC instance on the Internal Subnet. The reverse proxy provides an additional layer of access control and decouples the internal service from direct internet exposure.
-- **No Direct Public IP on OVOC:** Unlike the SBC, OVOC does not have a dedicated Elastic IP or public-facing ENI. The OVOC instance resides entirely on the Internal Subnet and is reachable from the internet only via the Palo Alto + AWS Reverse Proxy ingress path.
-- **FQDN Resolution:** The OVOC FQDN (e.g., `ovoc.yourdomain.com`) resolves to the public IP of the Palo Alto / reverse proxy ingress, not directly to the OVOC instance.
+- **Cloud Firewall:** Inbound traffic from the internet is inspected by the cloud firewall, which provides Layer 7 application inspection, threat prevention, URL filtering, and SSL decryption capabilities.
+- **Reverse Proxy:** Behind the cloud firewall, a reverse proxy terminates and forwards HTTPS requests to the internal OVOC instance on the Internal Subnet. The reverse proxy provides an additional layer of access control and decouples the internal service from direct internet exposure.
+- **No Direct Public IP on OVOC:** Unlike the SBC, OVOC does not have a dedicated Elastic IP or public-facing ENI. The OVOC instance resides entirely on the Internal Subnet and is reachable from the internet only via the cloud firewall + reverse proxy ingress path.
+- **FQDN Resolution:** The OVOC FQDN (e.g., `ovoc.yourdomain.com`) resolves to the public IP of the cloud firewall / reverse proxy ingress, not directly to the OVOC instance.
 
 **Applicable Traffic:**
 
 | Traffic | Source | Destination | Protocol | Path |
 |---------|--------|-------------|----------|------|
-| Graph API Webhooks | Microsoft 365 | OVOC | TCP 443 | Internet → Palo Alto → AWS Reverse Proxy → OVOC |
-| OVOC Web UI | Admin Users | OVOC | TCP 443 | Internet → Palo Alto → AWS Reverse Proxy → OVOC |
+| Graph API Webhooks | Microsoft 365 | OVOC | TCP 443 | Internet → Cloud Firewall → Reverse Proxy → OVOC |
+| OVOC Web UI | Admin Users | OVOC | TCP 443 | Internet → Cloud Firewall → Reverse Proxy → OVOC |
 
 **Design Rationale:**
 
 - OVOC uses standard HTTPS (TCP 443) which is fully compatible with reverse proxy and Layer 7 firewall inspection.
-- The Palo Alto firewall provides centralised threat prevention, logging, and compliance enforcement for all inbound HTTPS traffic.
+- The cloud firewall provides centralised threat prevention, logging, and compliance enforcement for all inbound HTTPS traffic.
 - Microsoft 365 Graph API webhooks are standard HTTPS POST requests that traverse the reverse proxy without protocol compatibility issues.
 - This pattern aligns with the organisation's standard security posture for publishing internal services to the internet.
 
@@ -789,8 +789,8 @@ grant_type=client_credentials
 2. **License:** Active "Analytics" license for Teams QoE monitoring
 3. **Certificate:** OVOC must have a **valid public CA certificate** (not self-signed)
 4. **Network (Outbound):** Outbound HTTPS (443) to Microsoft Graph API endpoints
-5. **Network (Inbound):** OVOC must be reachable from Microsoft 365 IPs on TCP 443 for webhook notifications. Inbound traffic is published via the Palo Alto + AWS Reverse Proxy ingress path (see Section 5 External Publishing Patterns).
-6. **FQDN:** Properly configured FQDN (e.g., `ovoc.yourdomain.com`) resolving to the public IP of the Palo Alto / reverse proxy ingress
+5. **Network (Inbound):** OVOC must be reachable from Microsoft 365 IPs on TCP 443 for webhook notifications. Inbound traffic is published via the cloud firewall + reverse proxy ingress path (see Section 5 External Publishing Patterns).
+6. **FQDN:** Properly configured FQDN (e.g., `ovoc.yourdomain.com`) resolving to the public IP of the cloud firewall / reverse proxy ingress
 
 #### Data Retrieved from Microsoft
 
@@ -4449,7 +4449,7 @@ flowchart TB
 | 1.7 | February 2026 | KS | Added comprehensive interface mapping diagrams (Appendix D.8) showing all physical ports, ethernet groups, IP interfaces, media realms, SIP interfaces, and IP groups for all appliances: Proxy SBC (AWS), Downstream SBC, Downstream SBC with LBO, OVOC, ARM Configurator, ARM Router, and Stack Manager; Added end-to-end connectivity map showing complete solution architecture across AU and US regions |
 | 1.8 | February 2026 | KS | Comprehensive review and correction pass: Fixed 4 broken mermaid diagrams (D.1 arrow directions, D.2 orphaned nodes, D.5 invalid bidirectional arrows, D.8.5 duplicate node IDs); Resolved Stack Manager role contradiction across 7 locations (does not manage active HA failover); Fixed QoE port inconsistency (5000→5001); Corrected network interface mapping from 2-ENI to 4-ENI; Standardised TLS Context name to "Teams"; Fixed firewall protocol TCP→UDP for internal SIP signalling; Updated OVOC storage from GP2 to GP3; Added SIP Provider node to D.1 diagram; Updated certificate notes (Baltimore CyberTrust Root expiry, DigiCert G3 clarification, EKU enforcement timeline); Added previous-generation instance notes for r4/m4 families; Fixed revertive-mode description; Standardised spelling to British/Australian English; Aligned Appendix C storage sizes with main document; Fixed formatting inconsistencies |
 | 1.9 | February 2026 | KS | Consolidated Stack Manager deployment to Australian region only: Removed Stack Manager from US region (us-east-1); Australian Stack Manager now manages all regions via cross-region AWS API calls; Updated production VM count from 10 to 9; Removed US Stack Manager break glass account; Updated D.3 production diagram, D.4 subnet diagram, deployment phases, IAM policy notes, Section 9/18/20/21, Appendix A/B/C; Updated all tables, checklists, and credentials references to reflect single-region Stack Manager model |
-| 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added dual External Publishing Patterns: SBC uses bespoke dedicated EIP + Security Group L4 (no firewall), OVOC uses traditional Palo Alto + AWS Reverse Proxy ingress; Added Cloud East-West Firewall section for internal traffic inspection; Updated OVOC Security Group and prerequisites for reverse proxy ingress; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
+| 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added dual External Publishing Patterns: SBC uses bespoke dedicated EIP + Security Group L4 (no firewall), OVOC uses traditional cloud firewall + reverse proxy ingress; Added Cloud East-West Firewall section for internal traffic inspection; Updated OVOC Security Group and prerequisites for reverse proxy ingress; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
 
 ---
 
