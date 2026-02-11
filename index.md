@@ -7,7 +7,7 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 2.1
+**Document Version:** 2.2
 **Date:** February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -36,8 +36,9 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 18. [Deployment Methodology](#18-deployment-methodology)
 19. [High Availability Considerations](#19-high-availability-considerations)
 20. [IAM Permissions and Security](#20-iam-permissions-and-security)
-21. [Cyber Security Variation: Stack Manager Component](#21-cyber-security-variation-stack-manager-component)
+21. [Cyber Security Considerations](#21-cyber-security-considerations)
 22. [Licensing Considerations](#22-licensing-considerations)
+- [22A. OVOC Data Analytics and Reporting](#22a-ovoc-data-analytics-and-reporting)
 23. [References and Documentation](#23-references-and-documentation)
 - [Appendix A: Deployment Checklist](#appendix-a-deployment-checklist)
 - [Appendix B: Credentials Reference Template](#appendix-b-credentials-reference-template)
@@ -87,7 +88,7 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 
 1. **Initial Stack Deployment:** The Stack Manager deploys and configures the SBC HA stack via CloudFormation, including all required network interfaces, security groups, and route table entries.
 
-2. **Virtual IP Address Management:** The Stack Manager allocates and manages Virtual IP addresses (by default from the `169.254.64.0/24` subnet) that exist outside the VPC CIDR range during initial deployment.
+2. **Virtual IP Address Management:** The Stack Manager allocates and manages Virtual IP addresses (from the `10.x.x.x` range) that are routable within the VPC CIDR during initial deployment.
 
 3. **Cluster Lifecycle Management:** The Stack Manager handles initial deployment, topology updates, and "stack healing" in case of underlying cloud resource corruption.
 
@@ -199,20 +200,43 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
     "Version": "2012-10-17",
     "Statement": [
         {
+            "Sid": "AllowDescribeActions",
             "Effect": "Allow",
             "Action": [
-                "ec2:DescribeRouteTables",
-                "ec2:CreateRoute",
-                "ec2:ReplaceRoute",
-                "ec2:DeleteRoute",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:DescribeInstances"
+                "ec2:DescribeAddresses",
+                "ec2:DescribeNetworkInterfaceAttribute",
+                "ec2:DescribeNetworkInterfaces"
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "AllowReplaceRoute",
+            "Effect": "Allow",
+            "Action": "ec2:ReplaceRoute",
+            "Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:route-table/<ROUTE_TABLE_ID>",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Env": "<NonProd_SBC|Prod_SBC>"
+                }
+            }
+        },
+        {
+            "Sid": "AllowAssociateAddress",
+            "Effect": "Allow",
+            "Action": "ec2:AssociateAddress",
+            "Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:elastic-ip/<EIP_ALLOCATION_ID>",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/App": "Voice",
+                    "aws:ResourceTag/Env": "<NonProd_SBC|Prod_SBC>"
+                }
+            }
         }
     ]
 }
 ```
+
+> **Note:** Replace `<REGION>`, `<ACCOUNT_ID>`, `<ROUTE_TABLE_ID>`, and `<EIP_ALLOCATION_ID>` with your environment-specific values. The `Env` tag value should match your environment naming convention (e.g., `NonProd_SBC` or `Prod_SBC`).
 
 **Note:** The HA subnet must have connectivity to AWS API endpoints (via NAT Gateway or VPC Endpoint) for failover to function correctly.
 
@@ -346,6 +370,7 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
 | Inbound | UDP | 162 | SBC CIDR | SNMP Traps |
 | Inbound | UDP | 1161 | SBC CIDR | Keep-alive (NAT traversal) |
 | Inbound | TCP | 5001 | SBC CIDR | QoE Reporting |
+| Inbound | TCP | 5432 | ETL Platform CIDR | Analytics API (PostgreSQL) |
 | Outbound | TCP | 443 | 0.0.0.0/0 | Microsoft Graph API |
 | Outbound | All | All | VPC CIDR | Internal traffic |
 
@@ -409,6 +434,7 @@ Internal/private-side traffic between the SBC and on-premises infrastructure tra
 | PSTN Media | Proxy SBC | SIP Provider AU/US | UDP 40000-41999 | Inspected |
 | Management | OVOC/ARM | Proxy SBC | TCP 443, UDP 162 | Inspected |
 | Management | Admin | Proxy SBC | TCP 22, TCP 443 | Inspected |
+| Analytics ETL | ETL Platform | OVOC | TCP 5432 | Inspected |
 
 **Design Considerations:**
 
@@ -779,7 +805,7 @@ The Proxy SBC is deployed in a **Multi-AZ High Availability (HA)** configuration
   - **External (WAN) Subnet** -- Used for public-facing SIP signalling and media traffic (e.g., towards Microsoft Teams Direct Routing).
 - **Unique IP Addresses:** Every SBC instance uses unique IP addresses for each of its network interfaces. No IP address is shared between the Active and Standby instances at the interface level.
 - **Elastic IP Handling:** Elastic IPs are assigned to the Active instance's WAN interface. During a failover event, the Elastic IP is automatically moved to the Standby instance, which then assumes the Active role. This ensures that the public-facing FQDN continues to resolve to the correct instance without DNS changes.
-- **Virtual IP (VIP) Handling:** Virtual IPs are allocated from the **169.254.64.0/24** range, which must fall outside the VPC CIDR block. These VIPs are used for private VPC connectivity (LAN-side). During a switchover, the VPC routing table entries are updated to point to the newly Active instance, ensuring continued reachability of the VIP.
+- **Virtual IP (VIP) Handling:** Virtual IPs are allocated from the **10.x.x.x** range within the VPC CIDR block. These VIPs are used for private VPC connectivity (LAN-side). During a switchover, the VPC routing table entries are updated to point to the newly Active instance, ensuring continued reachability of the VIP.
 - **AWS EC2 API Interaction:** The Active instance handles Elastic IP and Virtual IP reassignment by interacting with AWS EC2 APIs over the HA subnet. Appropriate IAM roles and permissions must be configured to allow these API calls.
 - **Stack Manager (MANDATORY):** The AudioCodes Stack Manager is a mandatory component. It deploys SBC stacks via AWS CloudFormation and handles initial HA deployment, topology updates, and Day 2 operations (software upgrades, stack maintenance). A single Stack Manager instance is deployed in the Australian region per environment and manages SBC HA stacks across all regions (including US) via cross-region AWS API calls. During failover, the SBCs themselves update VPC route tables by calling AWS EC2 APIs directly to redirect traffic to the newly Active instance. The Stack Manager must be deployed and operational before any SBC HA pair is provisioned.
 - **HA Scope:** HA is supported within a **single VPC** across **two Availability Zones only**. Cross-VPC HA and cross-Region HA are **not supported**.
@@ -1833,6 +1859,12 @@ This section details all firewall rules required for the AudioCodes SBC solution
 | | OVOC → Microsoft | TCP | OVOC IP | Any | login.microsoftonline.com | 443 | Azure AD authentication |
 | | OVOC → Microsoft | TCP | OVOC IP | Any | graph.microsoft.com | 443 | Microsoft Graph API |
 
+#### Data Analytics API
+
+| Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
+|---------|-----------|----------|--------|----------|-------------|----------|--------|
+| Analytics API (PostgreSQL) | ETL Platform → OVOC | TCP | ETL Platform IP / CIDR | Any | OVOC IP | 5432 | Read-only SQL access to analytics views. Requires SSL. |
+
 ### 16.3 ARM Firewall Rules
 
 #### Device Administration via OVOC
@@ -2120,20 +2152,19 @@ Store break glass credentials in a secure, access-controlled secret repository o
 | Failover Trigger | Health check failure, manual trigger |
 | Failover Mechanism | SBC directly updates VPC route tables via AWS API |
 | Call Handling | Active IP calls maintained; PSTN calls dropped |
-| Virtual IP Range | 169.254.64.0/24 (default, outside VPC CIDR) |
+| Virtual IP Range | 10.x.x.x (within VPC CIDR) |
 | Heartbeat Network | Dedicated HA subnet between SBC instances |
 
 > **CRITICAL: SBC IAM Role Required for HA Failover**
 >
-> SBCs **MUST** have an IAM role attached to call AWS APIs during failover. The SBCs directly manipulate VPC route tables to redirect traffic to the newly Active instance. **Without this IAM role, HA failover will NOT work.**
+> SBCs **MUST** have an IAM role attached to call AWS APIs during failover. The SBCs directly manipulate VPC route tables and reassign Elastic IPs to redirect traffic to the newly Active instance. **Without this IAM role, HA failover will NOT work.**
 >
-> **Required IAM Permissions:**
-> - `ec2:CreateRoute` - Create new route table entries for VIP
-> - `ec2:DeleteRoute` - Remove old route table entries
-> - `ec2:ReplaceRoute` - Update existing route table entries
-> - `ec2:DescribeRouteTables` - Query current route table state
-> - `ec2:DescribeNetworkInterfaces` - Query ENI information
-> - `ec2:DescribeInstances` - Query instance information
+> **Required IAM Permissions (least-privilege, per AudioCodes recommendation):**
+> - `ec2:DescribeAddresses` - Query Elastic IP allocation state (`Resource: *`)
+> - `ec2:DescribeNetworkInterfaceAttribute` - Query ENI attributes (`Resource: *`)
+> - `ec2:DescribeNetworkInterfaces` - Query ENI information (`Resource: *`)
+> - `ec2:ReplaceRoute` - Update existing route table entries (scoped to specific route table ARN + `Env` tag)
+> - `ec2:AssociateAddress` - Reassign Elastic IP during failover (scoped to specific EIP ARN + `App`/`Env` tags)
 >
 > **Network Requirement:** The HA subnet must have connectivity to AWS API endpoints (via NAT Gateway or VPC Endpoint for EC2). Without this connectivity, the SBC cannot call AWS APIs to perform route table updates.
 >
@@ -2148,7 +2179,7 @@ Before deploying an SBC HA pair, ensure all of the following requirements are me
 - [ ] **HA Subnet Created** - Dedicated subnet for HA heartbeat communication between SBC instances
 - [ ] **AWS API Connectivity** - HA subnet has outbound connectivity to AWS EC2 API endpoints (via NAT Gateway or VPC Endpoint)
 - [ ] **Two Availability Zones** - SBC instances deployed in separate AZs within the same VPC
-- [ ] **Virtual IP Allocated** - VIP from 169.254.64.0/24 range (must be outside VPC CIDR)
+- [ ] **Virtual IP Allocated** - VIP from 10.x.x.x range allocated within VPC CIDR
 - [ ] **Route Tables Configured** - VPC route tables prepared for VIP routing
 - [ ] **Stack Manager Deployed** - Required for initial HA cluster deployment (see [Section 21](#21-cyber-security-variation-stack-manager-component))
 
@@ -2197,7 +2228,7 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 
 | Traffic Type | Direction | Source IP Type | Failover Mechanism | Provider Action Required |
 |--------------|-----------|----------------|-------------------|-------------------------|
-| **Internal (SBC to Regional SIP Provider via Direct Connect)** | SBC initiates outbound registration and calls to provider via Direct Connect or VPN | Virtual IP (169.254.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI; new Active SBC re-registers | None - transparent |
+| **Internal (SBC to Regional SIP Provider via Direct Connect)** | SBC initiates outbound registration and calls to provider via Direct Connect or VPN | Virtual IP (10.x.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI; new Active SBC re-registers | None - transparent |
 | **External (Teams from Internet)** | Microsoft Teams infrastructure from public internet | Elastic IP (public) on External interface | Elastic IP reassigned from failed SBC to Standby SBC | None - transparent |
 
 **Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The regional SIP provider experiences a brief interruption but does not need to take any action.
@@ -2208,7 +2239,7 @@ When onboarding a new SIP trunk with a regional SIP provider (SIP Provider AU or
 
 | Information | Value | Notes |
 |-------------|-------|-------|
-| **SBC Source IP Address** | Virtual IP on Internal interface (e.g., 169.254.64.10) | Provider should expect SIP REGISTER and calls from this IP |
+| **SBC Source IP Address** | Virtual IP on Internal interface (e.g., 10.x.x.x) | Provider should expect SIP REGISTER and calls from this IP |
 | **Provider's SIP Server Address** | Provided by SIP Provider | The SBC will register to this address |
 | **SIP Port** | 5060 (UDP/TCP) or 5061 (TLS) | Based on your security requirements |
 | **Registration Credentials** | Username/password from provider | SBC uses these to authenticate with provider |
@@ -2242,11 +2273,11 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
 | Entity | Location | Connects To | IP Type | Interface | Failover Impact |
 |--------|----------|-------------|---------|-----------|-----------------|
 | Microsoft Teams | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
-| SIP Provider AU (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
-| SIP Provider US (Direct Connect) | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
-| Downstream SBCs | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
-| 3rd Party PBX | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
-| Registered Endpoints | On-premises | Virtual IP | Private (169.254.x.x) | Internal (LAN) | Route table updated |
+| SIP Provider AU (Direct Connect) | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
+| SIP Provider US (Direct Connect) | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
+| Downstream SBCs | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
+| 3rd Party PBX | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
+| Registered Endpoints | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
 
 **Key Design Points:**
 
@@ -2389,29 +2420,80 @@ Use Microsoft Compliance Recording (Purview or third-party policy-based) for Tea
 }
 ```
 
+> **Note:** AudioCodes confirms these broad permissions (`ec2:*`, `cloudformation:*`) are required for Stack Manager to function — it creates and manages SBC HA stacks via CloudFormation. These permissions cannot be reduced without breaking Stack Manager functionality.
+
+#### Temporal IAM Elevation Pattern (Recommended)
+
+Because the Stack Manager requires broad permissions but is only actively used during deployment and Day 2 operations, implement a temporal elevation pattern to reduce standing privilege:
+
+| Phase | IAM State | When |
+|-------|-----------|------|
+| **Normal operations** | Detach or disable the Stack Manager IAM policy | Day-to-day — Stack Manager is idle |
+| **Deployment / Day 2** | Attach the full Stack Manager IAM policy | During initial deployment, software upgrades, stack healing, or topology changes |
+| **Post-operation** | Detach or disable the policy again | Immediately after the operation completes |
+
+**Implementation options:**
+
+1. **IAM Policy toggle:** Keep the policy created but detach it from the Stack Manager role when not in use. Re-attach via AWS Console or CLI before operations.
+2. **AWS SCP (Service Control Policy):** Use an SCP to deny the broad permissions by default; temporarily remove the SCP deny during operations.
+3. **Automation:** Use a runbook or pipeline that attaches the policy, performs the Stack Manager operation, and detaches the policy as a post-step.
+
+> **Important:** Ensure the temporal elevation process is documented in the organisation's change management procedures. All attach/detach events are logged in CloudTrail for audit.
+
 ### SBC IAM Policy (Required for HA Failover)
 
-The SBCs require their own IAM role to perform route table updates during HA failover. This is a more restrictive policy than the Stack Manager.
+The SBCs require their own IAM role to perform route table updates and EIP reassignment during HA failover. This policy follows AudioCodes' recommended least-privilege model with resource-scoped permissions and tag-based conditions.
 
 ```json
 {
     "Version": "2012-10-17",
     "Statement": [
         {
+            "Sid": "AllowDescribeActions",
             "Effect": "Allow",
             "Action": [
-                "ec2:DescribeRouteTables",
-                "ec2:CreateRoute",
-                "ec2:ReplaceRoute",
-                "ec2:DeleteRoute",
-                "ec2:DescribeNetworkInterfaces",
-                "ec2:DescribeInstances"
+                "ec2:DescribeAddresses",
+                "ec2:DescribeNetworkInterfaceAttribute",
+                "ec2:DescribeNetworkInterfaces"
             ],
             "Resource": "*"
+        },
+        {
+            "Sid": "AllowReplaceRoute",
+            "Effect": "Allow",
+            "Action": "ec2:ReplaceRoute",
+            "Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:route-table/<ROUTE_TABLE_ID>",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/Env": "<NonProd_SBC|Prod_SBC>"
+                }
+            }
+        },
+        {
+            "Sid": "AllowAssociateAddress",
+            "Effect": "Allow",
+            "Action": "ec2:AssociateAddress",
+            "Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:elastic-ip/<EIP_ALLOCATION_ID>",
+            "Condition": {
+                "StringEquals": {
+                    "aws:ResourceTag/App": "Voice",
+                    "aws:ResourceTag/Env": "<NonProd_SBC|Prod_SBC>"
+                }
+            }
         }
     ]
 }
 ```
+
+> **Note:** Replace `<REGION>`, `<ACCOUNT_ID>`, `<ROUTE_TABLE_ID>`, and `<EIP_ALLOCATION_ID>` with your environment-specific values. The `Env` tag value should match your environment naming convention (e.g., `NonProd_SBC` or `Prod_SBC`).
+
+#### SBC IAM Policy Design Rationale
+
+| Statement | Actions | Resource Scope | Rationale |
+|-----------|---------|----------------|-----------|
+| `AllowDescribeActions` | `DescribeAddresses`, `DescribeNetworkInterfaceAttribute`, `DescribeNetworkInterfaces` | `*` | AWS Describe actions do not support resource-level scoping; required for SBC to query its own network state |
+| `AllowReplaceRoute` | `ReplaceRoute` | Specific route table ARN | Scoped to the VPC route table used for VIP routing; tag condition restricts to AudioCodes SBC environment |
+| `AllowAssociateAddress` | `AssociateAddress` | Specific EIP ARN | Scoped to the Elastic IP used for SBC external publishing; dual tag conditions restrict to Voice workload in correct environment |
 
 ### IAM Role Creation Steps
 
@@ -2467,6 +2549,7 @@ The solution employs two distinct external publishing patterns and a unified aut
 - **All SBCs use on-premises AD:** Both Proxy and Downstream SBCs authenticate against on-premises Active Directory (LDAPS) for consistency, WAN resilience, and operational simplicity. MFA is not available with this model — this is an accepted trade-off. See Section 10.4 for full details.
 - **OVOC and ARM use Entra ID:** These components use Microsoft Entra ID (OAuth 2.0) with Conditional Access and MFA support. See Section 6 for app registrations.
 - **Cloud east-west firewall:** All internal/private-side traffic traverses a cloud east-west firewall for inspection. The SBC's external WAN interface does not traverse this firewall. See Section 5 Cloud East-West Firewall.
+- **OVOC Data Analytics API:** The ETL platform connects to OVOC PostgreSQL (TCP 5432) on the internal subnet for daily data extraction. Traffic traverses the cloud east-west firewall. The `analytics` user is read-only with no write capability. See [Section 22A: OVOC Data Analytics and Reporting](#22a-ovoc-data-analytics-and-reporting) for full details.
 
 ### Stack Manager Component
 
@@ -2491,7 +2574,7 @@ The Stack Manager is a dedicated virtual machine deployed in the Australian regi
 #### Primary Functions (Initial Deployment)
 1. **CloudFormation Orchestration:** Creates and manages AWS CloudFormation stacks for SBC HA deployment
 2. **Network Configuration:** Configures ENIs, security groups, and route table entries for Virtual IPs
-3. **Virtual IP Allocation:** Allocates Virtual IPs from the 169.254.64.0/24 range for HA routing
+3. **Virtual IP Allocation:** Allocates Virtual IPs from the 10.x.x.x range for HA routing
 4. **Instance Provisioning:** Deploys SBC EC2 instances with correct IAM roles and network attachments
 
 #### Day 2 Operations (Ongoing Management)
@@ -2535,8 +2618,8 @@ The Stack Manager requires an IAM role with the following permissions:
 
 | Permission | Justification | Risk Level |
 |------------|---------------|------------|
-| `ec2:*` | Required to create/modify EC2 instances, ENIs, security groups, and route tables for SBC deployment | Medium |
-| `cloudformation:*` | Required to create and manage CloudFormation stacks for infrastructure-as-code deployment | Medium |
+| `ec2:*` | Required to create/modify EC2 instances, ENIs, security groups, and route tables for SBC deployment. Cannot be reduced (AudioCodes confirmed). Mitigate via temporal IAM elevation. | Medium |
+| `cloudformation:*` | Required to create and manage CloudFormation stacks for infrastructure-as-code deployment. Cannot be reduced. Mitigate via temporal IAM elevation. | Medium |
 | `cloudwatch:DeleteAlarms`, `cloudwatch:PutMetricAlarm` | Required to configure monitoring alarms for SBC health | Low |
 | `iam:PassRole` | Required to assign IAM roles to SBC instances during deployment | Medium |
 | `iam:ListInstanceProfiles` | Required to enumerate available instance profiles for SBC assignment | Low |
@@ -2544,7 +2627,15 @@ The Stack Manager requires an IAM role with the following permissions:
 
 #### Scope Limitation Recommendations
 
-For enhanced security posture, consider restricting the `ec2:*` permission to specific resource ARNs or tags:
+AudioCodes confirms that the broad `ec2:*` and `cloudformation:*` permissions cannot be reduced without breaking Stack Manager functionality. However, the following mitigations are recommended:
+
+**1. Temporal IAM Elevation (Primary recommendation)**
+
+Detach the Stack Manager IAM policy when not actively performing deployment or Day 2 operations. See [Section 20: Temporal IAM Elevation Pattern](#temporal-iam-elevation-pattern-recommended) for the full procedure.
+
+**2. Tag-based condition (Additional layer)**
+
+For enhanced security posture, consider adding a tag condition to restrict the scope of `ec2:*` to resources tagged with the AudioCodes project:
 
 ```json
 {
@@ -2560,6 +2651,8 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
     }
 }
 ```
+
+> **Caveat:** Not all EC2 actions support tag-based conditions. Test thoroughly in non-production before applying to production. CloudFormation stack creation may fail if tag conditions block required actions on untagged resources.
 
 ### Network Placement
 
@@ -2656,7 +2749,147 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 - License tiers:
   - **Device count:** Number of SBCs and endpoints managed
   - **Analytics license:** **Required for Teams QoE integration**
+  - **Data Analytics API license:** **Required for direct PostgreSQL access to OVOC analytics views** (SW/OVOC/ANALYTICS — "Analytic API Voice Quality")
   - **Advanced reporting:** Optional enhanced reporting features
+
+---
+
+## 22A. OVOC Data Analytics and Reporting
+
+### Overview
+
+OVOC stores Quality of Experience (QoE), Call Detail Record (CDR), alarm, and topology data in a local PostgreSQL database (`dbems`). By default, the analytics data views retain only the **last 24 hours** of data. This section documents how to extract that data daily to a corporate data lake and surface it via Power BI for historical reporting and trend analysis.
+
+### OVOC Data Analytics API
+
+The OVOC Data Analytics API is **not a REST API** — it provides direct read-only PostgreSQL (SQL) access to pre-defined database views.
+
+| Attribute | Detail |
+|-----------|--------|
+| **Protocol** | PostgreSQL wire protocol |
+| **Port** | TCP 5432 |
+| **Database** | `dbems` |
+| **User** | `analytics` (read-only, SELECT only) |
+| **Access type** | SQL queries against pre-defined views |
+| **License required** | "Analytic API Voice Quality" (SW/OVOC/ANALYTICS) — see [Section 22](#22-licensing-considerations) |
+
+### Available Database Views
+
+| View | Category | Description |
+|------|----------|-------------|
+| `NODES_VIEW` | Topology | Device and node details (SBCs, gateways, IP phones) |
+| `LINKS_VIEW` | Topology | Network link information between nodes |
+| `CALLS_VIEW` | QoE | Individual call records with quality metrics (MOS, jitter, packet loss) |
+| `ALARMS_VIEW` | Alarms | Active and historical alarm data |
+| `NODES_SUMMARY_VIEW` | QoE | Aggregated node-level quality statistics |
+| `LINKS_SUMMARY_VIEW` | QoE | Aggregated link-level quality statistics |
+
+In addition to the 6 primary views above, OVOC provides **28 enumeration/lookup views** for decoding integer codes (e.g., alarm severity levels, codec types, call termination reasons) into human-readable values.
+
+### Data Retention Constraints
+
+| Constraint | Detail |
+|------------|--------|
+| **Default analytics window** | Last 24 hours |
+| **Access mode** | Read-only (SELECT only) |
+| **Change tracking** | None — no CDC, no cursors, no change data capture |
+| **Multitenancy** | Not supported — all data visible to the `analytics` user |
+
+> **CRITICAL:** The analytics views expose a rolling 24-hour window. If a daily extraction is missed, that day's data is **permanently lost** and cannot be recovered from OVOC. ETL job monitoring and alerting is essential.
+
+### Data Lake Integration Architecture
+
+The recommended architecture extracts data daily from OVOC and loads it into a corporate data lake for long-term retention and reporting:
+
+```
+OVOC PostgreSQL (dbems)
+        │
+        │  TCP 5432 (SSL)
+        │  analytics user (read-only)
+        ▼
+┌─────────────────────┐
+│   ETL Platform       │
+│   (Azure Data Factory│
+│    / AWS Glue /      │
+│    Python script)    │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│   Corporate Data Lake│
+│   (S3 / Azure Data   │
+│    Lake / Synapse)   │
+└─────────┬───────────┘
+          │
+          ▼
+┌─────────────────────┐
+│   Power BI           │
+│   (Historical        │
+│    dashboards)       │
+└─────────────────────┘
+```
+
+**ETL Pipeline Steps:**
+
+1. **Schedule:** Daily extraction, timed to run within the 24-hour analytics window (e.g., 02:00 AEST)
+2. **Connect:** ETL platform connects to OVOC PostgreSQL on port 5432 via the `analytics` user with SSL
+3. **Extract:** Query all 6 primary views plus required enumeration views (full 24-hour window)
+4. **Transform:** Decode integer codes using enumeration views, add extraction timestamp, de-duplicate if needed
+5. **Load:** Write to corporate data lake in partitioned format (e.g., by date)
+6. **Validate:** Confirm row counts and data completeness; alert on zero-row extractions
+
+### Power BI Configuration
+
+| Aspect | Recommendation |
+|--------|---------------|
+| **Data source** | Corporate data lake (not OVOC directly) |
+| **Refresh schedule** | Daily, after ETL completes |
+| **Direct OVOC connection** | Not recommended for production — 24-hour window only, no historical data |
+| **Dashboard examples** | Call quality trends (MOS over time), alarm frequency, top talkers, codec distribution |
+
+### Cyber Security Considerations
+
+#### Network Access
+
+- Port 5432 must be opened from the ETL platform to OVOC on the internal subnet
+- Traffic should traverse the cloud east-west firewall (internal subnet) for inspection and logging
+- PostgreSQL connections must use SSL encryption (`sslmode=require` in the connection string)
+
+#### Credential Management
+
+- The `analytics` user password is managed via the OVOC Application Maintenance CLI
+- Store the password in the organisation's secrets manager (e.g., AWS Secrets Manager, Azure Key Vault)
+- Rotate the password per the organisation's credential rotation policy
+- Do not embed credentials in ETL scripts or source code
+
+#### Access Control
+
+- The `analytics` user has **read-only (SELECT only)** access — no write, update, delete, or DDL capability
+- Access is limited to pre-defined views only — the user cannot access underlying database tables
+- No multitenancy filtering — all data across all managed devices is visible to the `analytics` user
+
+#### Data Classification
+
+- CDR data contains call metadata: source/destination numbers, timestamps, duration, codec
+- QoE data contains voice quality metrics: MOS scores, jitter, packet loss, round-trip time
+- Alarm data contains infrastructure event details
+- Classify as per organisation policy — likely **Internal/Confidential**
+- Ensure the data lake storage tier, encryption, and access controls meet the classification requirements
+
+#### Logging and Monitoring
+
+| Log Source | What to Monitor |
+|------------|----------------|
+| OVOC PostgreSQL connection logs | Successful/failed connection attempts from ETL platform |
+| ETL job execution logs | Job success/failure, row counts, extraction duration |
+| Data lake access logs | Who accesses the extracted data |
+| Power BI audit logs | Dashboard access and data refresh events |
+
+> **CRITICAL:** Monitor for failed ETL extractions. A missed extraction means that day's data is permanently lost. Configure alerting on ETL job failures with escalation to the operations team.
+
+### Licensing Prerequisite
+
+The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** license (SW/OVOC/ANALYTICS). This is separate from the base OVOC license and the Teams QoE Analytics license. See [Section 22: Licensing Considerations](#22-licensing-considerations).
 
 ---
 
@@ -2834,6 +3067,7 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 | OVOC | TCP | 443 | Inbound | HTTPS Web UI |
 | OVOC | UDP | 162 | Inbound | SNMP Traps from SBCs |
 | OVOC | TCP | 5001 | Inbound | QoE Reporting from SBCs |
+| OVOC | TCP | 5432 | Inbound | Analytics API (PostgreSQL) from ETL Platform |
 | Stack Manager | TCP | 443 | Inbound | HTTPS Management |
 | Stack Manager | TCP | 22 | Inbound | SSH Management |
 | Stack Manager | TCP | 443 | Outbound | AWS API Access |
@@ -3050,6 +3284,7 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 | 1.9 | February 2026 | KS | Consolidated Stack Manager deployment to Australian region only: Removed Stack Manager from US region (us-east-1); Australian Stack Manager now manages all regions via cross-region AWS API calls; Updated production VM count from 10 to 9; Removed US Stack Manager break glass account; Updated D.3 production diagram, D.4 subnet diagram, deployment phases, IAM policy notes, Section 9/18/20/21, Appendix A/B/C; Updated all tables, checklists, and credentials references to reflect single-region Stack Manager model |
 | 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added dual External Publishing Patterns: SBC uses bespoke dedicated EIP + Security Group L4 (no firewall), OVOC uses traditional cloud firewall + reverse proxy ingress; Added Cloud East-West Firewall section for internal traffic inspection; Updated OVOC Security Group and prerequisites for reverse proxy ingress; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
 | 2.1 | February 2026 | KS | Unified SBC authentication to on-premises Active Directory (LDAPS) for all SBCs: Removed split identity model where Proxy SBC used Microsoft Entra ID (OAuth 2.0); All SBCs now use on-prem AD for consistency, WAN resilience, and operational simplicity; Documented MFA limitation as accepted trade-off; Removed AudioCodes-SBC-Management app registration; OVOC and ARM retain Entra ID authentication with MFA support; Broadened Section 21 from Stack Manager-only to comprehensive Cyber Security Considerations with security architecture summary, publishing patterns, and authentication model overview; Removed duplicate network security requirements from Section 21 (consolidated to Section 5.3) |
+| 2.2 | February 2026 | KS | Added Section 22A OVOC Data Analytics and Reporting: Documented OVOC Data Analytics API (direct PostgreSQL read-only access to analytics views), 24-hour data retention constraint, daily ETL pipeline to corporate data lake, Power BI integration, and comprehensive cyber security considerations (network access, credential management, access control, data classification, logging); Tightened SBC HA IAM policy per AudioCodes recommendation: Replaced 6-action Resource:* policy with least-privilege multi-statement policy using resource-scoped ARNs and tag-based conditions (ec2:AssociateAddress, ec2:DescribeAddresses, ec2:DescribeNetworkInterfaceAttribute, ec2:DescribeNetworkInterfaces, ec2:ReplaceRoute); Added temporal IAM elevation pattern for Stack Manager (detach broad permissions when not in active use); Updated OVOC Security Group (TCP 5432), Cloud East-West Firewall table, Section 16 OVOC Firewall Rules, Appendix C Port Summary, and Section 21 Security Architecture Summary for Analytics API; Added Data Analytics API license to OVOC Licensing section |
 
 ---
 
