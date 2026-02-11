@@ -2,7 +2,7 @@
 
 **File:** `/home/kevin/public/AudioCodes-AWS-Deployment-Guide.md`
 **Date:** 2026-02-10
-**Validator:** Claude Opus 4
+**Validator:** Automated
 
 ---
 

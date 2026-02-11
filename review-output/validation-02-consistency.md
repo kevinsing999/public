@@ -2,7 +2,7 @@
 
 **Document:** `/home/kevin/public/AudioCodes-AWS-Deployment-Guide.md`
 **Date:** 2026-02-10
-**Reviewer:** Automated (Claude)
+**Reviewer:** Automated
 
 ---
 
