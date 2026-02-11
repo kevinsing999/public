@@ -3,3 +3,8 @@ title: AudioCodes AWS Deployment Guide
 description: Unified Deployment and Configuration Guide for AudioCodes SBC Infrastructure on AWS with Microsoft Teams Direct Routing
 plugins:
   - jekyll-remote-theme
+
+markdown: kramdown
+kramdown:
+  input: GFM
+  hard_wrap: false
