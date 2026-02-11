@@ -7,7 +7,7 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 1.8
+**Document Version:** 1.9
 **Date:** February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -61,7 +61,7 @@ This document provides deployment guidance for the AudioCodes voice infrastructu
 
 2. **SBCs Handle Failover:** During HA switchover, the **SBCs themselves** call AWS APIs to update route tables and move Virtual IPs. The HA subnet requires connectivity to AWS API endpoints.
 
-3. **Stack Manager Retained for Day 2:** Stack Manager is recommended to be retained (low cost t3.medium) for ongoing management tasks such as software updates, stack healing, and configuration changes.
+3. **Stack Manager Retained for Day 2:** Stack Manager is recommended to be retained (low cost t3.medium) for ongoing management tasks such as software updates, stack healing, and configuration changes. A single instance is deployed per environment in the Australian region, managing all regions (including US) via cross-region AWS API calls.
 
 4. **HA Scope:** High Availability is configured **within a single VPC across two Availability Zones**. This deployment does NOT use cross-VPC HA or AWS Transit Gateway for Virtual IP routing.
 
@@ -152,8 +152,8 @@ The Virtual IP addresses are used for failover routing **within the same VPC**, 
 ### API Access Requirements
 
 #### Stack Manager API Access
-The Stack Manager requires **internet access** (via Internet Gateway or NAT Gateway) to communicate with AWS APIs for initial deployment and Day 2 operations:
-- EC2 API
+The Stack Manager requires **internet access** (via Internet Gateway or NAT Gateway) to communicate with AWS APIs for initial deployment and Day 2 operations. The Stack Manager is deployed in the Australian region only and manages SBC HA stacks in all regions (including US) via cross-region AWS API calls:
+- EC2 API (including cross-region endpoints for US region management)
 - CloudFormation API
 - IAM API
 - Elastic Load Balancing API (if using NLB)
@@ -220,7 +220,7 @@ flowchart TB
                 SBC1_AUS --> SBC2_AUS
                 SBC2_AUS --> SBC1_AUS
             end
-            SM_AUS["Stack Manager<br/>(t3.medium)<br/>HA Deployment & Day 2 Ops"]
+            SM_AUS["Stack Manager<br/>(t3.medium)<br/>HA Deployment & Day 2 Ops<br/>Manages AU + US Regions"]
             subgraph MGMT_AUS["Management Components"]
                 OVOC["OVOC Server<br/>(m5.2xlarge)<br/>Includes Device Manager"]
                 ARM_CFG_AUS["ARM Configurator<br/>(m4.xlarge)"]
@@ -234,7 +234,6 @@ flowchart TB
                 SBC1_US --> SBC2_US
                 SBC2_US --> SBC1_US
             end
-            SM_US["Stack Manager<br/>(t3.medium)<br/>US Region Manager"]
             ARM_RTR_US["ARM Router<br/>(m4.large)"]
         end
     end
@@ -250,7 +249,6 @@ flowchart TB
     style SBC1_US fill:#bbdefb,stroke:#1565c0
     style SBC2_US fill:#bbdefb,stroke:#1565c0
     style SM_AUS fill:#c8e6c9,stroke:#2e7d32
-    style SM_US fill:#f8bbd9,stroke:#c2185b
     style OVOC fill:#ffe0b2,stroke:#ef6c00
     style ARM_CFG_AUS fill:#ffe0b2,stroke:#ef6c00
     style ARM_RTR_AUS fill:#ffe0b2,stroke:#ef6c00
@@ -264,12 +262,13 @@ flowchart TB
 - 1x ARM Configurator
 - 1x ARM Router
 
-**Total US VMs: 4**
+**Total US VMs: 3**
 - 2x SBC (HA pair)
-- 1x Stack Manager
 - 1x ARM Router
 
-**PRODUCTION TOTAL: 10 VMs**
+> **Note:** The US region does not have a dedicated Stack Manager. The Australian Stack Manager manages US SBC HA stacks remotely via cross-region AWS API calls.
+
+**PRODUCTION TOTAL: 9 VMs**
 ---
 
 ## 4. Component Specifications
@@ -334,13 +333,13 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
 | **Purpose** | HA cluster deployment, lifecycle management, Day 2 operations |
 | **EC2 Instance Type** | t3.medium |
 | **Storage** | 8 GiB gp3 (default) |
-| **Deployment** | One per region where SBC HA is deployed |
+| **Deployment** | One per environment, hosted in Australian region; manages all regions including US via cross-region AWS API calls |
 | **Lifecycle** | Retained ongoing for Day 2 operations (low cost) |
 
 #### Critical Requirements
 
-- **Must reside in the same VPC** as the SBC instances it manages
-- **Requires internet access** (via IGW or NAT Gateway) for AWS API calls
+- **Hosted in the Australian region** and manages SBC HA stacks across all regions via cross-region AWS API calls
+- **Requires internet access** (via IGW or NAT Gateway) for AWS API calls (including cross-region API endpoints)
 - **IAM Role** with EC2, CloudFormation, IAM, and optionally ELB permissions
 
 #### Operational Notes
@@ -418,7 +417,7 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
 flowchart TB
     subgraph VIP["Virtual IP Range: 169.254.64.0/24<br/>(Outside VPC CIDR)"]
         direction LR
-        VIP_DESC["Used by Stack Manager for deployment orchestration<br/>Routes updated to point to active SBC ENI"]
+        VIP_DESC["Used by Stack Manager (AU region) for deployment orchestration<br/>Routes updated to point to active SBC ENI"]
     end
 
     subgraph VPC["VPC: 10.0.0.0/16"]
@@ -863,7 +862,7 @@ The Proxy SBC is deployed in a **Multi-AZ High Availability (HA)** configuration
 - **Elastic IP Handling:** Elastic IPs are assigned to the Active instance's WAN interface. During a failover event, the Elastic IP is automatically moved to the Standby instance, which then assumes the Active role. This ensures that the public-facing FQDN continues to resolve to the correct instance without DNS changes.
 - **Virtual IP (VIP) Handling:** Virtual IPs are allocated from the **169.254.64.0/24** range, which must fall outside the VPC CIDR block. These VIPs are used for private VPC connectivity (LAN-side). During a switchover, the VPC routing table entries are updated to point to the newly Active instance, ensuring continued reachability of the VIP.
 - **AWS EC2 API Interaction:** The Active instance handles Elastic IP and Virtual IP reassignment by interacting with AWS EC2 APIs over the HA subnet. Appropriate IAM roles and permissions must be configured to allow these API calls.
-- **Stack Manager (MANDATORY):** The AudioCodes Stack Manager is a mandatory component. It deploys SBC stacks via AWS CloudFormation and handles initial HA deployment, topology updates, and Day 2 operations (software upgrades, stack maintenance). During failover, the SBCs themselves update VPC route tables by calling AWS EC2 APIs directly to redirect traffic to the newly Active instance. The Stack Manager must be deployed and operational before the SBC HA pair is provisioned.
+- **Stack Manager (MANDATORY):** The AudioCodes Stack Manager is a mandatory component. It deploys SBC stacks via AWS CloudFormation and handles initial HA deployment, topology updates, and Day 2 operations (software upgrades, stack maintenance). A single Stack Manager instance is deployed in the Australian region per environment and manages SBC HA stacks across all regions (including US) via cross-region AWS API calls. During failover, the SBCs themselves update VPC route tables by calling AWS EC2 APIs directly to redirect traffic to the newly Active instance. The Stack Manager must be deployed and operational before any SBC HA pair is provisioned.
 - **HA Scope:** HA is supported within a **single VPC** across **two Availability Zones only**. Cross-VPC HA and cross-Region HA are **not supported**.
 
 ##### Subnet Requirements
@@ -2249,12 +2248,13 @@ Each AudioCodes workload **must** have a dedicated local break glass account for
 
 | Component | Username | Purpose |
 |-----------|----------|---------|
-| Stack Manager | `breakglass-stackmgr-prod-us` | Emergency Stack Manager access |
 | SBC #1 (AZ-A) | `breakglass-sbc1-prod-us` | Emergency SBC access |
 | SBC #2 (AZ-B) | `breakglass-sbc2-prod-us` | Emergency SBC access |
 | ARM Router (US) | `breakglass-armrtr-prod-us` | Emergency ARM Router access |
 
-**Production US Total: 4 break glass accounts**
+**Production US Total: 3 break glass accounts**
+
+> **Note:** No Stack Manager break glass account is required for the US region. The Australian Stack Manager manages US SBC HA stacks remotely.
 
 ### Password Storage
 
@@ -2314,19 +2314,19 @@ flowchart TB
         P2_7["2.7 Document all<br/>credentials securely"]
     end
 
-    subgraph Phase3["Phase 3: Stack Manager Deployment"]
+    subgraph Phase3["Phase 3: Stack Manager Deployment (AU Region Only)"]
         style Phase3 fill:#fff3e0,stroke:#f57c00
-        P3_1["3.1 Deploy Stack Manager<br/>EC2 instance (t3.medium)"]
-        P3_2["3.2 Attach IAM Role<br/>to Stack Manager"]
+        P3_1["3.1 Deploy Stack Manager<br/>EC2 instance (t3.medium)<br/>in Australian region"]
+        P3_2["3.2 Attach IAM Role<br/>to Stack Manager<br/>(cross-region permissions)"]
         P3_3["3.3 Configure Stack Manager<br/>networking"]
         P3_4["3.4 Configure break<br/>glass account"]
-        P3_5["3.5 Verify AWS API<br/>connectivity"]
+        P3_5["3.5 Verify AWS API<br/>connectivity (AU + US regions)"]
     end
 
-    subgraph Phase4["Phase 4: SBC HA Deployment (via Stack Manager)"]
+    subgraph Phase4["Phase 4: SBC HA Deployment (via Stack Manager from AU)"]
         style Phase4 fill:#fce4ec,stroke:#c2185b
-        P4_1["4.1 Use Stack Manager<br/>to deploy SBC pair"]
-        P4_2["4.2 Stack Manager creates<br/>CloudFormation stack"]
+        P4_1["4.1 Use Stack Manager (AU)<br/>to deploy SBC pair<br/>in target region"]
+        P4_2["4.2 Stack Manager creates<br/>CloudFormation stack<br/>(cross-region for US)"]
         P4_3["4.3 SBC instances<br/>deployed across AZs"]
         P4_4["4.4 Virtual IPs configured<br/>in route tables"]
         P4_5["4.5 Configure break glass<br/>accounts on both SBCs"]
@@ -2388,8 +2388,8 @@ flowchart TB
 
 | Component | Deployment Method | Source |
 |-----------|------------------|--------|
-| Stack Manager | AWS EC2 Console / CLI | AudioCodes AMI from AWS Marketplace |
-| Mediant VE SBC | **Via Stack Manager only** (for HA) | Stack Manager orchestrates deployment |
+| Stack Manager | AWS EC2 Console / CLI (AU region only) | AudioCodes AMI from AWS Marketplace |
+| Mediant VE SBC | **Via Stack Manager only** (for HA); Stack Manager in AU manages all regions | Stack Manager orchestrates deployment via cross-region API |
 | ARM Configurator | AWS EC2 Console using AudioCodes AMI | AWS Marketplace Community AMI |
 | ARM Router | AWS EC2 Console using AudioCodes AMI | AWS Marketplace Community AMI |
 | OVOC | AWS EC2 Console using AudioCodes AMI | AudioCodes provided AMI |
@@ -2797,6 +2797,8 @@ Use Microsoft Compliance Recording (Purview or third-party policy-based) for Tea
 
 ### Stack Manager IAM Policy
 
+> **Note:** The Stack Manager is deployed in the Australian region only and requires cross-region permissions to manage SBC HA stacks in all regions (including US). The `Resource: "*"` scope enables cross-region API calls to us-east-1 and any future regions.
+
 ```json
 {
     "Version": "2012-10-17",
@@ -2855,7 +2857,7 @@ The SBCs require their own IAM role to perform route table updates during HA fai
 7. Attach the policy created above
 8. Name the role (e.g., `AudioCodes-StackManager-Role`)
 9. Click **Create Role**
-10. Attach this role to the Stack Manager EC2 instance via **Actions** > **Security** > **Modify IAM Role**
+10. Attach this role to the Stack Manager EC2 instance in the Australian region via **Actions** > **Security** > **Modify IAM Role**
 
 #### SBC Role
 
@@ -2876,7 +2878,7 @@ The SBCs require their own IAM role to perform route table updates during HA fai
 
 ### Overview
 
-The **AudioCodes Stack Manager** is a new infrastructure component introduced to support High Availability SBC deployments across multiple AWS Availability Zones. This section documents the security considerations, permissions, and risk assessment required for cyber security approval.
+The **AudioCodes Stack Manager** is a new infrastructure component introduced to support High Availability SBC deployments across multiple AWS Availability Zones. A single Stack Manager instance is deployed per environment in the Australian region (ap-southeast-2), managing SBC HA stacks in both Australian and US regions via cross-region AWS API calls. This section documents the security considerations, permissions, and risk assessment required for cyber security approval.
 
 ### Component Classification
 
@@ -2885,13 +2887,14 @@ The **AudioCodes Stack Manager** is a new infrastructure component introduced to
 | **Component Type** | Management/Orchestration VM |
 | **Vendor** | AudioCodes |
 | **Deployment** | AWS EC2 (t3.medium) |
-| **Network Zone** | Management Subnet |
+| **Network Zone** | Management Subnet (Australian region) |
 | **Data Classification** | Infrastructure Management |
 | **New Component** | Yes - Required for multi-AZ SBC HA deployment |
+| **Deployment Model** | One per environment in Australian region; manages all regions via cross-region API |
 
 ### Functional Description
 
-The Stack Manager is a dedicated virtual machine that performs the following functions:
+The Stack Manager is a dedicated virtual machine deployed in the Australian region (one per environment) that manages SBC HA stacks across all regions. It performs the following functions:
 
 #### Primary Functions (Initial Deployment)
 1. **CloudFormation Orchestration:** Creates and manages AWS CloudFormation stacks for SBC HA deployment
@@ -3146,7 +3149,7 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 - [ ] AWS Account access confirmed
 - [ ] VPC and subnet design finalized
 - [ ] Security groups designed and documented
-- [ ] IAM policy and role created for Stack Manager
+- [ ] IAM policy and role created for Stack Manager (AU region, with cross-region permissions)
 - [ ] Key pairs created
 - [ ] AudioCodes licensing obtained (or PAYG decision made)
 - [ ] Public CA certificates procured for SBCs and OVOC
@@ -3175,9 +3178,9 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 
 ### Component Deployment
 
-- [ ] Stack Manager deployed and verified
-- [ ] Stack Manager IAM role attached
-- [ ] SBC HA pair deployed via Stack Manager
+- [ ] Stack Manager deployed in Australian region and verified
+- [ ] Stack Manager IAM role attached (cross-region permissions for AU + US)
+- [ ] SBC HA pair deployed via Stack Manager (AU region; US region via cross-region API)
 - [ ] TLS certificates installed on SBCs
 - [ ] SBC HA failover tested
 - [ ] ARM Configurator deployed
@@ -3228,7 +3231,6 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 | OVOC | Prod | `breakglass-ovoc-prod` | `/audiocodes/prod-aus/breakglass-ovoc-prod` |
 | ARM Configurator | Prod | `breakglass-armcfg-prod` | `/audiocodes/prod-aus/breakglass-armcfg-prod` |
 | ARM Router | Prod AUS | `breakglass-armrtr-prod-aus` | `/audiocodes/prod-aus/breakglass-armrtr-prod-aus` |
-| Stack Manager | Prod US | `breakglass-stackmgr-prod-us` | `/audiocodes/prod-us/breakglass-stackmgr-prod-us` |
 | SBC #1 | Prod US | `breakglass-sbc1-prod-us` | `/audiocodes/prod-us/breakglass-sbc1-prod-us` |
 | SBC #2 | Prod US | `breakglass-sbc2-prod-us` | `/audiocodes/prod-us/breakglass-sbc2-prod-us` |
 | ARM Router | Prod US | `breakglass-armrtr-prod-us` | `/audiocodes/prod-us/breakglass-armrtr-prod-us` |
@@ -3281,7 +3283,7 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 
 | Component | Environment | Instance Type | vCPUs | Memory | Storage |
 |-----------|-------------|---------------|-------|--------|---------|
-| Stack Manager | All | t3.medium | 2 | 4 GiB | 8 GiB gp3 |
+| Stack Manager | All (hosted in AU region) | t3.medium | 2 | 4 GiB | 8 GiB gp3 |
 | Mediant VE SBC (No Transcoding) | All | m5n.large | 2 | 8 GiB | 20 GiB gp3 |
 | Mediant VE SBC (With Transcoding) | All | c5.2xlarge | 8 | 16 GiB | 20 GiB gp3 |
 | ARM Configurator | All | m4.xlarge | 4 | 16 GiB | 100 GB gp3 |
@@ -4392,7 +4394,9 @@ flowchart TB
 | **OVOC** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, Microsoft Graph API, Endpoints |
 | **ARM Configurator** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, ARM Routers, Microsoft Graph |
 | **ARM Router** | eth0 (ENI) | 1 | 1 | N/A | N/A | ARM Configurator, SBCs |
-| **Stack Manager** | eth0 (ENI) | 1 | 1 | N/A | N/A | AWS APIs, SBCs (during deployment) |
+| **Stack Manager** | eth0 (ENI) | 1 | 1 | N/A | N/A | AWS APIs (cross-region), SBCs (during deployment) |
+
+> **Note:** Stack Manager is deployed in the Australian region only (one per environment) and manages SBC HA stacks across all regions via cross-region AWS API calls.
 
 ---
 
@@ -4409,6 +4413,7 @@ flowchart TB
 | 1.6 | February 2026 | KS | Removed Cisco Webex DI references; Added regional SIP providers (SIP Provider AU, SIP Provider US) for PSTN breakout per region; Enhanced SBC IAM role documentation with CRITICAL callout and Prerequisites checklist in Section 19; Updated firewall rules for regional SIP providers |
 | 1.7 | February 2026 | KS | Added comprehensive interface mapping diagrams (Appendix D.8) showing all physical ports, ethernet groups, IP interfaces, media realms, SIP interfaces, and IP groups for all appliances: Proxy SBC (AWS), Downstream SBC, Downstream SBC with LBO, OVOC, ARM Configurator, ARM Router, and Stack Manager; Added end-to-end connectivity map showing complete solution architecture across AU and US regions |
 | 1.8 | February 2026 | KS | Comprehensive review and correction pass: Fixed 4 broken mermaid diagrams (D.1 arrow directions, D.2 orphaned nodes, D.5 invalid bidirectional arrows, D.8.5 duplicate node IDs); Resolved Stack Manager role contradiction across 7 locations (does not manage active HA failover); Fixed QoE port inconsistency (5000→5001); Corrected network interface mapping from 2-ENI to 4-ENI; Standardised TLS Context name to "Teams"; Fixed firewall protocol TCP→UDP for internal SIP signalling; Updated OVOC storage from GP2 to GP3; Added SIP Provider node to D.1 diagram; Updated certificate notes (Baltimore CyberTrust Root expiry, DigiCert G3 clarification, EKU enforcement timeline); Added previous-generation instance notes for r4/m4 families; Fixed revertive-mode description; Standardised spelling to British/Australian English; Aligned Appendix C storage sizes with main document; Fixed formatting inconsistencies |
+| 1.9 | February 2026 | KS | Consolidated Stack Manager deployment to Australian region only: Removed Stack Manager from US region (us-east-1); Australian Stack Manager now manages all regions via cross-region AWS API calls; Updated production VM count from 10 to 9; Removed US Stack Manager break glass account; Updated D.3 production diagram, D.4 subnet diagram, deployment phases, IAM policy notes, Section 9/18/20/21, Appendix A/B/C; Updated all tables, checklists, and credentials references to reflect single-region Stack Manager model |
 
 ---
 
