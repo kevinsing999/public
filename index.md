@@ -7,7 +7,7 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 1.9
+**Document Version:** 2.0
 **Date:** February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -295,10 +295,9 @@ flowchart TB
 
 | Interface | Purpose | Subnet Type |
 |-----------|---------|-------------|
-| eth0 | Management (OVOC, ARM, SSH, HTTPS) | Management Subnet |
-| eth1 | LAN/Internal (Downstream SBCs, PBX, SIP Providers) | Internal Subnet |
-| eth2 | WAN/External (Microsoft Teams Direct Routing, Public SIP) | DMZ/External Subnet |
-| eth3 | HA Communication + AWS API Access | HA Subnet (dedicated) |
+| eth0 | Management + LAN/Internal (OVOC, ARM, SSH, HTTPS, Downstream SBCs, PBX, SIP Providers) | Internal Subnet |
+| eth1 | WAN/External (Microsoft Teams Direct Routing, Public SIP) | DMZ/External Subnet |
+| eth2 | HA Communication + AWS API Access | HA Subnet (dedicated) |
 
 #### SBC IAM Role Requirements
 
@@ -423,22 +422,22 @@ flowchart TB
     subgraph VPC["VPC: 10.0.0.0/16"]
         direction LR
         subgraph AZA["Availability Zone A"]
-            subgraph MainA["Main Subnet: 10.0.1.0/24"]
-                SBC_A["SBC eth0"]
+            subgraph MainA["Internal Subnet: 10.0.1.0/24"]
+                SBC_A["SBC eth0 (OAMP+LAN)"]
                 SM["Stack Manager"]
                 OVOC["OVOC (if deployed)"]
                 ARM["ARM (all components)"]
             end
             subgraph HAA["HA Subnet: 10.0.11.0/24"]
-                SBC_HA_A["SBC eth3 (HA traffic)"]
+                SBC_HA_A["SBC eth2 (HA traffic)"]
             end
         end
         subgraph AZB["Availability Zone B"]
-            subgraph MainB["Main Subnet: 10.0.2.0/24"]
-                SBC_B["SBC eth0"]
+            subgraph MainB["Internal Subnet: 10.0.2.0/24"]
+                SBC_B["SBC eth0 (OAMP+LAN)"]
             end
             subgraph HAB["HA Subnet: 10.0.12.0/24"]
-                SBC_HA_B["SBC eth3 (HA traffic)"]
+                SBC_HA_B["SBC eth2 (HA traffic)"]
             end
         end
     end
@@ -473,7 +472,7 @@ flowchart TB
 | Inbound | TCP | 22 | Admin CIDR | SSH |
 | Inbound | TCP | 80/443 | Admin CIDR | Web Management |
 | Inbound | TCP/UDP | 5060/5061 | SIP Endpoints | SIP Signalling |
-| Inbound | UDP | 6000-65535 | Media Sources | RTP Media |
+| Inbound | UDP | 6000-41999 | Media Sources | RTP Media |
 | Inbound | All | All | HA Subnet CIDR | HA Communication |
 | Outbound | All | All | 0.0.0.0/0 | All traffic |
 
@@ -497,6 +496,46 @@ flowchart TB
 | Inbound | TCP | 5001 | SBC CIDR | QoE Reporting |
 | Outbound | TCP | 443 | 0.0.0.0/0 | Microsoft Graph API |
 | Outbound | All | All | VPC CIDR | Internal traffic |
+
+### External Publishing Pattern
+
+The Proxy SBC uses a bespoke external publishing pattern for public-facing connectivity to Microsoft Teams Direct Routing and PSTN SIP providers. This pattern differs from standard reverse proxy or application gateway approaches commonly used for web applications.
+
+**Architecture:**
+
+- **Dedicated Elastic IP (EIP):** Each Proxy SBC HA pair is assigned a dedicated Elastic IP address on the External (WAN) ENI. The EIP provides the public-facing IP address for SIP signalling (TLS 5061) and SRTP media (UDP 20000-29999). During HA failover, the EIP is automatically reassigned to the newly Active instance.
+- **AWS Security Group (Layer 4):** Traffic filtering is enforced at the AWS Security Group level using Layer 4 rules (protocol, port, source/destination CIDR). Security Groups act as a stateful firewall controlling inbound and outbound traffic to the External ENI. SIP and media traffic from Microsoft Teams and PSTN providers is permitted based on published IP ranges and port allocations.
+- **No Reverse Proxy / Application Gateway:** Unlike web applications, SBC external connectivity does not use a reverse proxy, AWS Application Load Balancer, or application gateway. SIP/TLS and SRTP/RTP protocols require direct IP connectivity between the SBC and external parties for proper NAT traversal, session persistence, and real-time media delivery. The SBC handles its own TLS termination, SIP message inspection, and media anchoring natively.
+
+**Design Rationale:**
+
+- SIP signalling requires stateful session tracking that is incompatible with traditional load balancers or reverse proxies.
+- SRTP media streams require low-latency, direct UDP connectivity — additional proxy hops introduce jitter and latency.
+- Microsoft Teams Direct Routing expects the SBC FQDN to resolve directly to the SBC's public IP (EIP) for TLS certificate validation.
+- The SBC's built-in VoIP firewall provides application-layer (Layer 7) SIP message inspection, rate limiting, and classification in addition to the Layer 4 Security Group rules.
+
+### Cloud East-West Firewall
+
+Internal/private-side traffic between the SBC and on-premises infrastructure traverses a cloud east-west firewall for traffic inspection, policy enforcement, and security monitoring. This applies to all traffic on the Internal (OAMP + LAN) subnet.
+
+**Inspection Scope:**
+
+| Traffic Type | Source | Destination | Protocol/Ports | Inspection |
+|-------------|--------|-------------|----------------|------------|
+| SIP Signalling | Proxy SBC | Downstream SBCs | UDP 5060 | Inspected |
+| SIP Signalling | Proxy SBC | SIP Provider AU/US | UDP 5060 | Inspected |
+| RTP Media | Proxy SBC | Downstream SBCs | UDP 6000-19999 | Inspected |
+| PSTN Media | Proxy SBC | SIP Provider AU/US | UDP 40000-41999 | Inspected |
+| Management | OVOC/ARM | Proxy SBC | TCP 443, UDP 162 | Inspected |
+| Management | Admin | Proxy SBC | TCP 22, TCP 443 | Inspected |
+
+**Design Considerations:**
+
+- The cloud east-west firewall sits in the traffic path between the AWS VPC and on-premises infrastructure (via AWS Direct Connect / Transit Gateway). All internal traffic traverses this firewall for inspection.
+- Firewall rules must permit SIP signalling and RTP media ports as documented in the firewall rules tables (Sections 15-16). Blocking or rate-limiting RTP traffic will cause call quality degradation.
+- The firewall must support UDP session tracking for SIP and RTP traffic. Stateless firewalls or firewalls with aggressive UDP timeout values may cause media drops or one-way audio.
+- Firewall logging provides visibility into east-west traffic flows for security monitoring, compliance, and troubleshooting.
+- The external/public-facing interface (WAN ENI) does **not** traverse the east-west firewall — it is protected by the AWS Security Group and the SBC's native VoIP firewall (see External Publishing Pattern above).
 
 ---
 
@@ -853,10 +892,9 @@ The Mediant 800C supports full SBC and VoIP gateway functionality, enabling:
 The Proxy SBC is deployed in a **Multi-AZ High Availability (HA)** configuration within a single AWS VPC. The design principles and requirements are as follows:
 
 - **Multi-AZ HA Deployment:** Two SBC instances are deployed in an Active/Standby configuration across two different Availability Zones within the same AWS Region. This provides resilience against single-AZ failures.
-- **Subnet Connectivity:** Each SBC instance connects to four distinct subnets:
+- **Subnet Connectivity:** Each SBC instance connects to three distinct subnets:
   - **HA Subnet** -- Used for heartbeat communication between the Active and Standby instances.
-  - **Management Subnet** -- Used for SBC administration (SSH, HTTPS, SNMP, QoE) and internal SIP connectivity.
-  - **Internal (LAN) Subnet** -- Used for private/internal-facing SIP signalling and media traffic (e.g., towards on-premises infrastructure via AWS Direct Connect or Transit Gateway).
+  - **Internal Subnet** -- Used for both SBC administration (SSH, HTTPS, SNMP, QoE) and private/internal-facing SIP signalling and media traffic (e.g., towards on-premises infrastructure via AWS Direct Connect or Transit Gateway). Management (OAMP) and Internal (LAN) functions share a single ENI and subnet.
   - **External (WAN) Subnet** -- Used for public-facing SIP signalling and media traffic (e.g., towards Microsoft Teams Direct Routing).
 - **Unique IP Addresses:** Every SBC instance uses unique IP addresses for each of its network interfaces. No IP address is shared between the Active and Standby instances at the interface level.
 - **Elastic IP Handling:** Elastic IPs are assigned to the Active instance's WAN interface. During a failover event, the Elastic IP is automatically moved to the Standby instance, which then assumes the Active role. This ensures that the public-facing FQDN continues to resolve to the correct instance without DNS changes.
@@ -870,7 +908,7 @@ The Proxy SBC is deployed in a **Multi-AZ High Availability (HA)** configuration
 | Subnet | Purpose |
 |---|---|
 | **HA Subnet** (one per AZ) | Dedicated subnet for HA heartbeat and synchronisation traffic between the Active and Standby SBC instances. Each AZ has its own HA subnet. |
-| **Main Subnet** (Management) | Used for SBC administration access (SSH, HTTPS, SNMP, QoE) and internal SIP connectivity. |
+| **Internal Subnet** | Used for both SBC administration access (SSH, HTTPS, SNMP, QoE) and internal SIP signalling/media traffic. Management and LAN functions share this subnet. |
 | **Virtual IP Subnet** | The Virtual IP must be allocated from a subnet that does not overlap with any existing subnets in the VPC or connected networks. The VIP subnet must be routable within the AWS VPC. |
 
 ##### Connectivity
@@ -1235,7 +1273,7 @@ The Proxy SBC requires outbound HTTPS access to Microsoft Entra ID endpoints:
 | Requirement | Details |
 |-------------|---------|
 | Encryption | TLS 1.2 minimum (LDAPS enforces encryption) |
-| Network Segmentation | Management interface should be on dedicated management VLAN |
+| Network Segmentation | Management function shares the internal subnet (OAMP + LAN combined interface) |
 | Firewall | Permit only SBC management IP to DC LDAPS port |
 
 ---
@@ -1246,24 +1284,24 @@ The Proxy SBC requires outbound HTTPS access to Microsoft Entra ID endpoints:
 
 #### SBC Configuration Concept in Teams Direct Routing
 
-In the Teams Direct Routing Enterprise Model, the Proxy SBC connects Microsoft Teams Phone System to the PSTN and downstream SBC infrastructure. The SBC maintains separate network interfaces for internal (LAN) connectivity toward downstream SBCs, third-party PBX systems and external (WAN) connectivity toward Microsoft Teams and PSTN providers. Management and HA interfaces operate on dedicated subnets for administrative access and failover coordination respectively.
+In the Teams Direct Routing Enterprise Model, the Proxy SBC connects Microsoft Teams Phone System to the PSTN and downstream SBC infrastructure. The SBC maintains separate network interfaces for internal connectivity (management, signalling, and media toward downstream SBCs, third-party PBX systems) and external (WAN) connectivity toward Microsoft Teams and PSTN providers. Management (OAMP) and Internal (LAN) functions are consolidated onto a single interface and subnet. The HA interface operates on a dedicated subnet for failover coordination.
 
 #### Proxy SBC Virtual Ports
 
 The following interfaces are enabled on the Proxy SBC:
 
-| Interface | Status  |
-|-----------|---------|
-| GE_1      | Enabled |
-| GE_2      | Enabled |
-| GE_3      | Enabled |
-| GE_4      | Enabled |
-| GE_5      | Enabled |
-| GE_6      | Enabled |
-| GE_7      | Enabled |
-| GE_8      | Enabled |
+| Interface | Status   | Purpose |
+|-----------|----------|---------|
+| GE_1      | Enabled  | Ethernet Group 1 (OAMP + Internal) |
+| GE_2      | Enabled  | Ethernet Group 2 (External) |
+| GE_3      | Enabled  | Ethernet Group 3 (HA) |
+| GE_4      | Disabled | Unused |
+| GE_5      | Enabled  | Ethernet Group 1 (OAMP + Internal) - Redundant |
+| GE_6      | Enabled  | Ethernet Group 2 (External) - Redundant |
+| GE_7      | Enabled  | Ethernet Group 3 (HA) - Redundant |
+| GE_8      | Disabled | Unused |
 
-In AWS, AudioCodes physical ports (GE1-GE8) are virtualized and mapped to Elastic Network Interfaces (ENIs). Each ENI connects to a specific VPC subnet, acting like a virtual switch port, receiving its own private IP (with optional Elastic IP for public access). Since ports are grouped into Ethernet Groups for redundancy (GE1+GE5 for Management, GE2+GE6 for Internal, GE3+GE7 for External, GE4+GE8 for HA), four ENIs are created - one per Ethernet Group - for logical separation and redundancy at cloud level. Security Groups and routing tables control traffic flow.
+In AWS, AudioCodes physical ports (GE1-GE8) are virtualized and mapped to Elastic Network Interfaces (ENIs). Each ENI connects to a specific VPC subnet, acting like a virtual switch port, receiving its own private IP (with optional Elastic IP for public access). Since ports are grouped into Ethernet Groups for redundancy (GE1+GE5 for OAMP+Internal, GE2+GE6 for External, GE3+GE7 for HA), three ENIs are created - one per Ethernet Group - for logical separation and redundancy at cloud level. Management (OAMP) and Internal (LAN) functions share a single ENI and subnet, reducing the number of required network interfaces. Security Groups and routing tables control traffic flow.
 
 #### Downstream SBC Physical Ports
 
@@ -1290,20 +1328,18 @@ Ethernet Groups are used to define logical groupings of physical or virtual port
 
 #### Proxy SBC Ethernet Groups
 
-| Ethernet Group | Member Ports |
-|----------------|--------------|
-| Group 1        | GE_1, GE_5   |
-| Group 2        | GE_2, GE_6   |
-| Group 3        | GE_3, GE_7   |
-| Group 4        | GE_4, GE_8   |
+| Ethernet Group | Member Ports | Purpose |
+|----------------|--------------|---------|
+| Group 1        | GE_1, GE_5   | OAMP + Internal (LAN) |
+| Group 2        | GE_2, GE_6   | External (WAN) |
+| Group 3        | GE_3, GE_7   | HA |
 
 #### Downstream SBC Ethernet Groups
 
-| Ethernet Group | Member Ports |
-|----------------|--------------|
-| Group 1        | GE_1         |
-| Group 2        | GE_2         |
-| Group 3        | GE_3         |
+| Ethernet Group | Member Ports | Purpose |
+|----------------|--------------|---------|
+| Group 1        | GE_1         | OAMP + Internal (LAN) |
+| Group 2        | GE_2         | HA |
 
 #### Downstream SBC with LBO Ethernet Groups
 
@@ -1315,18 +1351,17 @@ The Ethernet Device table defines the logical network interfaces on the AudioCod
 
 #### Proxy SBC Ethernet Device Configuration
 
-The Proxy SBC requires four logical Ethernet interfaces to support management, internal (LAN-side) signalling and media, external (WAN-side/DMZ) signalling and media toward Microsoft Teams, and high-availability synchronisation between the HA pair.
+The Proxy SBC requires three logical Ethernet interfaces: a combined OAMP + Internal (LAN) interface for management and internal signalling/media, an External (WAN/DMZ) interface for Microsoft Teams, and an HA interface for high-availability synchronisation.
 
-| Interface Name         | Underlying Interface | VLAN ID  |
-|------------------------|----------------------|----------|
-| Management             | Group_1              | VLAN ID1 |
-| Internal (LAN)         | Group_2              | VLAN ID1 |
-| External (WAN)         | Group_3              | VLAN ID1 |
-| HA (High Availability) | Group_4              | VLAN ID1 |
+| Interface Name              | Underlying Interface | VLAN ID  |
+|-----------------------------|----------------------|----------|
+| OAMP + Internal (LAN)       | Group_1              | VLAN ID1 |
+| External (WAN)              | Group_2              | VLAN ID1 |
+| HA (High Availability)      | Group_3              | VLAN ID1 |
 
 **Design Notes:**
 
-- A single VLAN is used for trusted traffic (Management, Internal, and HA interfaces) with differentiation achieved through the use of different SIP listening ports on each interface. This simplifies the network topology while maintaining logical separation of traffic types.
+- Management (OAMP) and Internal (LAN) functions are consolidated onto a single Ethernet Device and ENI. This reduces the number of required network interfaces from four to three while maintaining logical separation through distinct IP interface application types (OAMP vs Media+Control) on the same underlying device.
 - External/untrusted traffic destined for or originating from the DMZ (i.e., Microsoft Teams Direct Routing) must traverse a separate physical or logical interface (External/WAN) to enforce security zone boundaries.
 - If the internal and external interfaces connect through **different physical switches**, they should be assigned to different physical ports on the SBC, each connected to the appropriate switch and VLAN.
 - If the internal and external interfaces connect through the **same physical switch infrastructure**, VLAN segmentation must be used to enforce traffic isolation between the trusted (internal) and untrusted (external/DMZ) zones. Appropriate firewall or ACL policies must be applied at the switch or upstream firewall to control inter-VLAN traffic.
@@ -1334,33 +1369,31 @@ The Proxy SBC requires four logical Ethernet interfaces to support management, i
 
 #### Downstream SBC Ethernet Device Configuration
 
-The Downstream SBC operates entirely within the trusted internal network and does not require a WAN-facing interface. It connects upstream to the Proxy SBC and downstream to registered endpoints on the LAN. Three logical interfaces are required: Management, Internal (LAN), and HA.
+The Downstream SBC operates entirely within the trusted internal network and does not require a WAN-facing interface. It connects upstream to the Proxy SBC and downstream to registered endpoints on the LAN. Two logical interfaces are required: a combined OAMP + Internal (LAN) interface and an HA interface.
 
-| Interface Name         | Underlying Interface | VLAN ID  |
-|------------------------|----------------------|----------|
-| Management             | Group_1              | VLAN ID1 |
-| Internal (LAN)         | Group_2              | VLAN ID1 |
-| HA (High Availability) | Group_3              | VLAN ID1 |
+| Interface Name              | Underlying Interface | VLAN ID  |
+|-----------------------------|----------------------|----------|
+| OAMP + Internal (LAN)       | Group_1              | VLAN ID1 |
+| HA (High Availability)      | Group_2              | VLAN ID1 |
 
 **Design Notes:**
 
-- Since the Downstream SBC does not terminate any external/untrusted connections, no External (WAN) interface is required.
-- All signalling and media traffic between the Downstream SBC and the Proxy SBC traverses the Internal (LAN) interface.
+- Management (OAMP) and Internal (LAN) functions are consolidated onto a single Ethernet Device, reducing the required interfaces from three to two.
+- All signalling and media traffic between the Downstream SBC and the Proxy SBC traverses the combined OAMP + Internal (LAN) interface.
 - The HA interface provides heartbeat and state synchronisation between the active and standby Downstream SBC nodes.
 
 #### Downstream SBC with LBO Ethernet Device Configuration
 
 The Downstream SBC with Local Breakout (LBO) shares the same Ethernet Device configuration as the standard Downstream SBC. The LBO functionality is achieved through additional SIP interface and routing configuration rather than additional physical or logical Ethernet interfaces.
 
-| Interface Name         | Underlying Interface | VLAN ID  |
-|------------------------|----------------------|----------|
-| Management             | Group_1              | VLAN ID1 |
-| Internal (LAN)         | Group_2              | VLAN ID1 |
-| HA (High Availability) | Group_3              | VLAN ID1 |
+| Interface Name              | Underlying Interface | VLAN ID  |
+|-----------------------------|----------------------|----------|
+| OAMP + Internal (LAN)       | Group_1              | VLAN ID1 |
+| HA (High Availability)      | Group_2              | VLAN ID1 |
 
 **Design Notes:**
 
-- The PSTN connectivity for Local Breakout is provided via the Internal (LAN) interface using a dedicated SIP signalling interface and media realm, as detailed in subsequent sections.
+- The PSTN connectivity for Local Breakout is provided via the combined OAMP + Internal (LAN) interface using a dedicated SIP signalling interface and media realm, as detailed in subsequent sections.
 
 ### 11.4 IP Interfaces
 
@@ -1368,47 +1401,42 @@ The IP Interfaces table defines the Layer 3 addressing and application type for 
 
 #### Proxy SBC IP Interfaces
 
-The Proxy SBC requires four IP interfaces corresponding to the four Ethernet Devices.
+The Proxy SBC requires three IP interfaces corresponding to the three Ethernet Devices.
 
-| Index | Application Types | Interface Mode | IP Address                | Gateway                   | DNS            | Interface Name  | Ethernet Device |
-|-------|-------------------|----------------|---------------------------|---------------------------|----------------|-----------------|-----------------|
-| 0     | OAMP              | IPv4 Manual    | X.X.X.X                   | X.X.X.X                   | X.X.X.X        | Management      | Management      |
-| 1     | Media + Control   | IPv4 Manual    | X.X.X.X                   | X.X.X.X                   | X.X.X.X        | Internal (LAN)  | Internal (LAN)  |
-| 2     | Media + Control   | IPv4 Manual    | X.X.X.X (DMZ IP)          | X.X.X.X (Router IP)       | As per ISP     | External (WAN)  | External (WAN)  |
-| 3     | Maintenance       | IPv4 Manual    | X.X.X.X                   | X.X.X.X                   | X.X.X.X        | HA              | HA              |
+| Index | Application Types   | Interface Mode | IP Address                | Gateway                   | DNS            | Interface Name        | Ethernet Device          |
+|-------|---------------------|----------------|---------------------------|---------------------------|----------------|-----------------------|--------------------------|
+| 0     | OAMP + Media + Control | IPv4 Manual | X.X.X.X                   | X.X.X.X                   | X.X.X.X        | OAMP + Internal (LAN) | OAMP + Internal (LAN)    |
+| 1     | Media + Control     | IPv4 Manual    | X.X.X.X (DMZ IP)          | X.X.X.X (Router IP)       | As per ISP     | External (WAN)        | External (WAN)           |
+| 2     | Maintenance         | IPv4 Manual    | X.X.X.X                   | X.X.X.X                   | X.X.X.X        | HA                    | HA                       |
 
 **Design Notes:**
 
-- **Index 0 (OAMP):** The Operations, Administration, Maintenance, and Provisioning interface is used for SBC management access (Web GUI, CLI, SNMP, syslog). This interface must be reachable from the network management systems.
-- **Index 1 (Internal LAN - Media + Control):** Carries SIP signalling and RTP media for internal/trusted trunk connections including Downstream SBCs, third-party PBX systems, and PSTN SIP trunk providers connected on the LAN side.
-- **Index 2 (External WAN - Media + Control):** Carries SIP signalling (TLS) and SRTP media for the Microsoft Teams Direct Routing connection. The IP address is the DMZ-facing address, the gateway is the DMZ router/firewall IP, and the DNS server is provided by the ISP or is the enterprise DNS server capable of resolving Microsoft 365 FQDNs.
-- **Index 3 (HA - Maintenance):** Dedicated to HA heartbeat and state synchronisation. The Maintenance application type ensures this interface is used exclusively for HA purposes.
+- **Index 0 (OAMP + Internal LAN):** Combined interface carrying both SBC management access (Web GUI, CLI, SNMP, syslog) and internal/trusted SIP signalling and RTP media traffic including Downstream SBCs, third-party PBX systems, and PSTN SIP trunk providers. This interface must be reachable from both network management systems and internal SIP endpoints.
+- **Index 1 (External WAN - Media + Control):** Carries SIP signalling (TLS) and SRTP media for the Microsoft Teams Direct Routing connection. The IP address is the DMZ-facing address, the gateway is the DMZ router/firewall IP, and the DNS server is provided by the ISP or is the enterprise DNS server capable of resolving Microsoft 365 FQDNs.
+- **Index 2 (HA - Maintenance):** Dedicated to HA heartbeat and state synchronisation. The Maintenance application type ensures this interface is used exclusively for HA purposes.
 
 #### Downstream SBC IP Interfaces
 
-The Downstream SBC requires three IP interfaces. No External (WAN) interface is configured as the Downstream SBC does not connect directly to Microsoft Teams or any external/DMZ network.
+The Downstream SBC requires two IP interfaces. No External (WAN) interface is configured as the Downstream SBC does not connect directly to Microsoft Teams or any external/DMZ network.
 
-| Index | Application Types | Interface Mode | IP Address | Gateway  | DNS      | Interface Name  | Ethernet Device |
-|-------|-------------------|----------------|------------|----------|----------|-----------------|-----------------|
-| 0     | OAMP              | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | Management      | Management      |
-| 1     | Media + Control   | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | Internal (LAN)  | Internal (LAN)  |
-| 2     | Maintenance       | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | HA              | HA              |
+| Index | Application Types      | Interface Mode | IP Address | Gateway  | DNS      | Interface Name        | Ethernet Device          |
+|-------|------------------------|----------------|------------|----------|----------|-----------------------|--------------------------|
+| 0     | OAMP + Media + Control | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | OAMP + Internal (LAN) | OAMP + Internal (LAN)    |
+| 1     | Maintenance            | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | HA                    | HA                       |
 
 **Design Notes:**
 
-- All SIP signalling and RTP media between the Downstream SBC and the Proxy SBC, as well as between the Downstream SBC and registered endpoints, is carried over the Internal (LAN) interface (Index 1).
-- The OAMP interface (Index 0) provides management access to the Downstream SBC.
-- The HA interface (Index 2) supports high-availability synchronisation between the active and standby nodes.
+- All SIP signalling, RTP media, and management traffic between the Downstream SBC and the Proxy SBC, as well as between the Downstream SBC and registered endpoints, is carried over the combined OAMP + Internal (LAN) interface (Index 0).
+- The HA interface (Index 1) supports high-availability synchronisation between the active and standby nodes.
 
 #### Downstream SBC with LBO IP Interfaces
 
-The Downstream SBC with Local Breakout (LBO) uses the same IP Interface configuration as the standard Downstream SBC. The PSTN local breakout connectivity is achieved by configuring additional SIP signalling interfaces and media realms on the existing Internal (LAN) IP interface, rather than by adding a separate IP interface.
+The Downstream SBC with Local Breakout (LBO) uses the same IP Interface configuration as the standard Downstream SBC. The PSTN local breakout connectivity is achieved by configuring additional SIP signalling interfaces and media realms on the existing combined OAMP + Internal (LAN) IP interface, rather than by adding a separate IP interface.
 
-| Index | Application Types | Interface Mode | IP Address | Gateway  | DNS      | Interface Name  | Ethernet Device |
-|-------|-------------------|----------------|------------|----------|----------|-----------------|-----------------|
-| 0     | OAMP              | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | Management      | Management      |
-| 1     | Media + Control   | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | Internal (LAN)  | Internal (LAN)  |
-| 2     | Maintenance       | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | HA              | HA              |
+| Index | Application Types      | Interface Mode | IP Address | Gateway  | DNS      | Interface Name        | Ethernet Device          |
+|-------|------------------------|----------------|------------|----------|----------|-----------------------|--------------------------|
+| 0     | OAMP + Media + Control | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | OAMP + Internal (LAN) | OAMP + Internal (LAN)    |
+| 1     | Maintenance            | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | HA                    | HA                       |
 
 ---
 
@@ -1537,19 +1565,19 @@ Media Realms define the RTP port ranges and interface bindings for media (audio)
 
 The Proxy SBC requires three Media Realms to handle media for internal trunk traffic, Microsoft Teams (external) traffic, and PSTN carrier traffic respectively.
 
-| Index | Name                 | Interface       | RTP Start Port | Number of Media Session Legs | RTP End Port (Calculated) |
-|-------|----------------------|-----------------|----------------|------------------------------|---------------------------|
-| 0     | Internal_Media_Realm | Internal (LAN)  | XXXX           | 1000                         | XXXX + 1999               |
-| 1     | M365_Media_Realm     | External (WAN)  | XXXX           | 1000                         | XXXX + 1999               |
-| 2     | PSTN_Media_Realm     | Internal (LAN)  | XXXX           | 1000                         | XXXX + 1999               |
+| Index | Name                 | Interface              | RTP Start Port | Number of Media Session Legs | RTP End Port (Calculated) |
+|-------|----------------------|------------------------|----------------|------------------------------|---------------------------|
+| 0     | Internal_Media_Realm | OAMP + Internal (LAN)  | XXXX           | 1000                         | XXXX + 1999               |
+| 1     | M365_Media_Realm     | External (WAN)         | XXXX           | 1000                         | XXXX + 1999               |
+| 2     | PSTN_Media_Realm     | OAMP + Internal (LAN)  | XXXX           | 500                          | XXXX + 999                |
 
 **Design Notes:**
 
-- **Internal_Media_Realm (Index 0):** Used for RTP media sessions between the Proxy SBC and internal entities such as Downstream SBCs, third-party PBX systems, and registered endpoints. Bound to the Internal (LAN) interface.
+- **Internal_Media_Realm (Index 0):** Used for RTP media sessions between the Proxy SBC and internal entities such as Downstream SBCs, third-party PBX systems, and registered endpoints. Bound to the OAMP + Internal (LAN) interface.
 - **M365_Media_Realm (Index 1):** Dedicated to RTP/SRTP media sessions between the Proxy SBC and Microsoft Teams (via the External/WAN/DMZ interface). This realm is bound to the External (WAN) interface so that media traffic egresses through the DMZ. Firewall rules must permit the configured RTP port range on this interface.
-- **PSTN_Media_Realm (Index 2):** Used for RTP media sessions between the Proxy SBC and the PSTN SIP trunk provider. Bound to the Internal (LAN) interface. A separate Media Realm is used (rather than sharing Internal_Media_Realm) to maintain distinct port ranges for troubleshooting and capacity management.
-- **Media Session Legs:** Each Media Realm is configured with 1000 media session legs. Each call consumes two legs (one for each direction), so each realm supports approximately 500 concurrent calls. Adjust this value based on expected call volumes and SBC licensing.
-- **RTP Port Range:** The RTP Start Port should be selected to avoid conflicts with other services. Each Media Realm requires a contiguous range of ports equal to twice the number of media session legs (e.g., 1000 legs = 2000 ports). Ensure that the port ranges for all Media Realms on the same interface do not overlap.
+- **PSTN_Media_Realm (Index 2):** Used for RTP media sessions between the Proxy SBC and the PSTN SIP trunk provider. Bound to the OAMP + Internal (LAN) interface. A separate Media Realm is used (rather than sharing Internal_Media_Realm) to maintain distinct port ranges for troubleshooting and capacity management. Configured with 500 session legs (250 concurrent calls) to align with PSTN trunk capacity requirements.
+- **Media Session Legs:** Internal, M365, and LMO Media Realms are configured with 1000 media session legs (approximately 500 concurrent calls each). The PSTN Media Realm is configured with 500 session legs (250 concurrent calls) to match the contracted PSTN trunk capacity. Each call consumes two legs (one for each direction). Adjust these values based on expected call volumes and SBC licensing.
+- **RTP Port Range:** The RTP Start Port should be selected to avoid conflicts with other services. Each Media Realm requires a contiguous range of ports equal to twice the number of media session legs (e.g., 1000 legs = 2000 ports, 500 legs = 1000 ports). Ensure that the port ranges for all Media Realms on the same interface do not overlap.
 
 #### Downstream SBC Media Realm
 
@@ -1557,25 +1585,25 @@ The standard Downstream SBC requires only a single Media Realm for internal medi
 
 | Index | Name                 | Interface       | RTP Start Port | Number of Media Session Legs |
 |-------|----------------------|-----------------|----------------|------------------------------|
-| 0     | Internal_Media_Realm | Internal (LAN)  | XXXX           | 1000                         |
+| 0     | Internal_Media_Realm | OAMP + Internal (LAN)  | XXXX           | 1000                         |
 
 **Design Notes:**
 
-- All media between the Downstream SBC and the Proxy SBC, as well as between the Downstream SBC and registered endpoints, uses this single Internal Media Realm.
+- All media between the Downstream SBC and the Proxy SBC, as well as between the Downstream SBC and registered endpoints, uses this single Internal Media Realm bound to the combined OAMP + Internal (LAN) interface.
 
 #### Downstream SBC with LBO Media Realm
 
 The Downstream SBC with Local Breakout requires two Media Realms: one for internal traffic toward the Proxy SBC and registered endpoints, and one for PSTN media traffic via the local SIP trunk.
 
-| Index | Name                 | Interface       | RTP Start Port | Number of Media Session Legs |
-|-------|----------------------|-----------------|----------------|------------------------------|
-| 0     | Internal_Media_Realm | Internal (LAN)  | XXXX           | 1000                         |
-| 1     | PSTN_Media_Realm     | Internal (LAN)  | XXXX           | 1000                         |
+| Index | Name                 | Interface              | RTP Start Port | Number of Media Session Legs |
+|-------|----------------------|------------------------|----------------|------------------------------|
+| 0     | Internal_Media_Realm | OAMP + Internal (LAN)  | XXXX           | 1000                         |
+| 1     | PSTN_Media_Realm     | OAMP + Internal (LAN)  | XXXX           | 500                          |
 
 **Design Notes:**
 
-- **Internal_Media_Realm (Index 0):** Handles media for calls between the Downstream SBC and the Proxy SBC, as well as registered endpoints.
-- **PSTN_Media_Realm (Index 1):** Handles media for calls that break out locally to the PSTN via the directly connected SIP trunk provider. A dedicated Media Realm ensures port range separation from internal media traffic.
+- **Internal_Media_Realm (Index 0):** Handles media for calls between the Downstream SBC and the Proxy SBC, as well as registered endpoints. Bound to the combined OAMP + Internal (LAN) interface.
+- **PSTN_Media_Realm (Index 1):** Handles media for calls that break out locally to the PSTN via the directly connected SIP trunk provider. A dedicated Media Realm ensures port range separation from internal media traffic. Configured with 500 session legs (250 concurrent calls) to align with PSTN trunk capacity.
 
 ### 13.3 Coder Groups
 
@@ -1935,14 +1963,14 @@ This section details all firewall rules required for the AudioCodes SBC solution
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | Integration with SIP Provider AU | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC Internal IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider AU | UDP | AU Proxy SBC Internal IP Address | 40000-49999 | SIP Provider AU IP/s | Any | Media |
+| | SBC → SIP Provider AU | UDP | AU Proxy SBC Internal IP Address | 40000-41999 | SIP Provider AU IP/s | Any | Media |
 
 #### Integration with SIP Provider US (US Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | Integration with SIP Provider US | SBC → SIP Provider US | UDP/TCP | US Proxy SBC Internal IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider US | UDP | US Proxy SBC Internal IP Address | 40000-49999 | SIP Provider US IP/s | Any | Media |
+| | SBC → SIP Provider US | UDP | US Proxy SBC Internal IP Address | 40000-41999 | SIP Provider US IP/s | Any | Media |
 
 #### Integration with Downstream SBC
 
@@ -2105,7 +2133,7 @@ This section details all firewall rules required for the AudioCodes SBC solution
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | SIP Signalling | SBC → Telco Provider | UDP/TCP | SBC IP Address | Any | Telco Provider IP/s | To be confirmed with Telco | SIP Signalling |
-| Media | SBC → Telco Provider | UDP | SBC IP Address | 40000-49999 | Telco Provider IP/s | Any | Media |
+| Media | SBC → Telco Provider | UDP | SBC IP Address | 40000-41999 | Telco Provider IP/s | Any | Media |
 
 #### Integration with Proxy SBC
 
@@ -3264,7 +3292,7 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 
 | Component | Protocol | Port Range | Direction | Purpose |
 |-----------|----------|------------|-----------|---------|
-| SBC | UDP | 6000-65535 | Inbound/Outbound | RTP/SRTP Media |
+| SBC | UDP | 6000-41999 | Inbound/Outbound | RTP/SRTP Media |
 | SBC | UDP | 49152-53247 | Outbound | Microsoft Teams Media |
 
 ### IP Range Summary (Microsoft Teams)
@@ -3313,7 +3341,7 @@ flowchart TB
             Active --> Standby
             Standby --> Active
         end
-        ProxySBCInfo["External Interface (WAN/DMZ)<br/>- Teams Direct Routing (TLS 5061)<br/>- Media: UDP 20000-29999<br/><br/>Internal Interface (LAN)<br/>- Downstream SBCs (UDP 5060)<br/>- Regional SIP Provider (UDP 5060)<br/>- 3rd Party PBX (UDP 5060)<br/>- Media: UDP 6000-49999"]
+        ProxySBCInfo["External Interface (WAN/DMZ)<br/>- Teams Direct Routing (TLS 5061)<br/>- Media: UDP 20000-29999<br/><br/>Internal Interface (LAN)<br/>- Downstream SBCs (UDP 5060)<br/>- Regional SIP Provider (UDP 5060)<br/>- 3rd Party PBX (UDP 5060)<br/>- Media: UDP 6000-41999"]
     end
 
     subgraph InternalZone["AWS VPC - INTERNAL ZONE"]
@@ -3339,8 +3367,8 @@ flowchart TB
     ARMRouter --> ProxySBC
     OVOC --> ProxySBC
 
-    ProxySBC -->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| SIPProvider
-    SIPProvider -->|"UDP 5060 (Signalling)<br/>UDP 40000-49999 (Media)"| ProxySBC
+    ProxySBC -->|"UDP 5060 (Signalling)<br/>UDP 40000-41999 (Media)"| SIPProvider
+    SIPProvider -->|"UDP 5060 (Signalling)<br/>UDP 40000-41999 (Media)"| ProxySBC
 
     ARMConfig -->|"HTTPS 443"| DownstreamSBC1
     ARMConfig -->|"HTTPS 443"| DownstreamSBC2
@@ -3436,7 +3464,7 @@ flowchart TB
 
         subgraph INT["INTERNAL INTERFACE - LAN"]
             INTERNAL["Internal_Media_Realm<br/>UDP 6000-9999<br/>RTP - Unencrypted"]
-            PSTN_PROXY["PSTN_Media_Realm<br/>UDP 40000-49999<br/>RTP - Unencrypted"]
+            PSTN_PROXY["PSTN_Media_Realm<br/>UDP 40000-41999<br/>RTP - Unencrypted"]
             LMO["LMO_Media_Realm<br/>UDP 30000-39999<br/>RTP - Local Endpoints"]
         end
     end
@@ -3467,7 +3495,7 @@ flowchart TB
         LBO_PROXY_PORT["To Proxy SBC<br/>UDP 10000-19999"]
         LBO_ENDPOINTS["To Registered Endpoints<br/>UDP 30000-39999"]
         LBO_PSTN["PSTN_Media_Realm<br/>RTP - Unencrypted"]
-        LBO_PROVIDER["To Local PSTN Provider<br/>UDP 40000-49999"]
+        LBO_PROVIDER["To Local PSTN Provider<br/>UDP 40000-41999"]
     end
 
     %% SRTP Encrypted Flows
@@ -3667,7 +3695,7 @@ sequenceDiagram
 | Teams Media | Microsoft 365 | Proxy SBC (WAN) | UDP | 20000-29999 | SRTP |
 | LMO Media | Teams Endpoints | SBC | UDP | 30000-39999 | RTP |
 | Internal Media | Downstream SBC | Proxy SBC | UDP | 10000-19999 | RTP |
-| PSTN Media | SBC | PSTN Provider | UDP | 40000-49999 | RTP |
+| PSTN Media | SBC | PSTN Provider | UDP | 40000-41999 | RTP |
 | 3rd Party PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
 | **Management** |
 | SNMP Traps | SBC | OVOC | UDP | 162 | None |
@@ -3705,51 +3733,44 @@ flowchart TB
     subgraph PROXY_SBC["PROXY SBC (Mediant VE - AWS)<br/>Instance Type: m5n.large"]
 
         subgraph PORTS["PHYSICAL/VIRTUAL PORTS (AWS ENI Mapping)"]
-            subgraph EG1["Ethernet Group 1 (OAMP)"]
+            subgraph EG1["Ethernet Group 1 (OAMP + Internal)"]
                 GE1["GE_1"]
                 GE5["GE_5"]
             end
-            subgraph EG2["Ethernet Group 2 (Media + Control)"]
+            subgraph EG2["Ethernet Group 2 (External)"]
                 GE2["GE_2"]
                 GE6["GE_6"]
             end
-            subgraph EG3["Ethernet Group 3 (Media + Control)"]
+            subgraph EG3["Ethernet Group 3 (HA)"]
                 GE3["GE_3"]
                 GE7["GE_7"]
             end
-            subgraph EG4["Ethernet Group 4 (Maintenance)"]
-                GE4["GE_4"]
-                GE8["GE_8"]
-            end
 
-            EG1 --> ENI0["Management ENI (eth0)<br/>Private IP: 10.x.x.x"]
-            EG2 --> ENI1["Internal ENI (eth1)<br/>Private IP: 10.x.x.x"]
-            EG3 --> ENI2["External ENI (eth2)<br/>Private IP: 10.x.x.x<br/>Elastic IP: X.X.X.X"]
-            EG4 --> ENI3["HA ENI (eth3)<br/>Private IP: 10.x.x.x<br/>Virtual IP: 169.254.64.x"]
+            EG1 --> ENI0["OAMP + Internal ENI (eth0)<br/>Private IP: 10.x.x.x"]
+            EG2 --> ENI1["External ENI (eth1)<br/>Private IP: 10.x.x.x<br/>Elastic IP: X.X.X.X"]
+            EG3 --> ENI2["HA ENI (eth2)<br/>Private IP: 10.x.x.x<br/>Virtual IP: 169.254.64.x"]
 
-            ENI0 --> SUB0["Management Subnet<br/>Admin/OVOC Access"]
-            ENI1 --> SUB1["Internal/LAN Subnet<br/>Downstream SBCs, PSTN, PBX"]
-            ENI2 --> SUB2["DMZ/External Subnet<br/>Microsoft Teams via EIP<br/>Public-facing TLS 5061"]
-            ENI3 --> SUB3["HA Subnet (Dedicated)<br/>HA Heartbeat, AWS API<br/>Failover routing"]
+            ENI0 --> SUB0["Internal Subnet<br/>Admin/OVOC + Downstream SBCs, PSTN, PBX"]
+            ENI1 --> SUB1["DMZ/External Subnet<br/>Microsoft Teams via EIP<br/>Public-facing TLS 5061"]
+            ENI2 --> SUB2["HA Subnet (Dedicated)<br/>HA Heartbeat, AWS API<br/>Failover routing"]
         end
 
         subgraph IP_INTERFACES["IP INTERFACES"]
-            IPIF0["Index 0: Management<br/>Type: OAMP | Device: Group_1<br/>HTTPS (443), SSH (22), SNMP,<br/>Syslog, LDAPS (636), NTP"]
-            IPIF1["Index 1: Internal (LAN)<br/>Type: Media+Control | Device: Group_2<br/>SIP UDP 5060, RTP 6000-49999"]
-            IPIF2["Index 2: External (WAN)<br/>Type: Media+Control | Device: Group_3<br/>SIP TLS 5061, SRTP 20000-29999"]
-            IPIF3["Index 3: HA<br/>Type: Maintenance | Device: Group_4<br/>HA Heartbeat, State Sync,<br/>AWS API Calls"]
+            IPIF0["Index 0: OAMP + Internal (LAN)<br/>Type: OAMP+Media+Control | Device: Group_1<br/>HTTPS (443), SSH (22), SNMP, Syslog,<br/>LDAPS (636), NTP, SIP UDP 5060,<br/>RTP 6000-41999"]
+            IPIF1["Index 1: External (WAN)<br/>Type: Media+Control | Device: Group_2<br/>SIP TLS 5061, SRTP 20000-29999"]
+            IPIF2["Index 2: HA<br/>Type: Maintenance | Device: Group_3<br/>HA Heartbeat, State Sync,<br/>AWS API Calls"]
         end
 
         subgraph MEDIA_REALMS["MEDIA REALMS"]
-            MR0["Index 0: Internal_Media_Realm<br/>Interface: Internal (LAN)<br/>Ports: 6000-9999 | Sessions: 1000<br/>RTP to Downstream SBCs, PBX, Other Proxy"]
+            MR0["Index 0: Internal_Media_Realm<br/>Interface: OAMP+Internal (LAN)<br/>Ports: 6000-9999 | Sessions: 1000<br/>RTP to Downstream SBCs, PBX, Other Proxy"]
             MR1["Index 1: M365_Media_Realm<br/>Interface: External (WAN)<br/>Ports: 20000-29999 | Sessions: 1000<br/>SRTP to Microsoft Teams"]
-            MR2["Index 2: PSTN_Media_Realm<br/>Interface: Internal (LAN)<br/>Ports: 40000-49999 | Sessions: 1000<br/>RTP to Regional SIP Provider (AU/US)"]
-            MR3["Index 3: LMO_Media_Realm<br/>Interface: Internal (LAN)<br/>Ports: 30000-39999 | Sessions: 1000<br/>RTP to Teams LMO endpoints"]
+            MR2["Index 2: PSTN_Media_Realm<br/>Interface: OAMP+Internal (LAN)<br/>Ports: 40000-41999 | Sessions: 500<br/>RTP to Regional SIP Provider (AU/US)"]
+            MR3["Index 3: LMO_Media_Realm<br/>Interface: OAMP+Internal (LAN)<br/>Ports: 30000-39999 | Sessions: 1000<br/>RTP to Teams LMO endpoints"]
         end
 
         subgraph SIP_INTERFACES["SIP INTERFACES"]
-            SIP0["Index 0: Internal (LAN)<br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>Downstream SBCs, PBX/Radio, Other Proxy"]
-            SIP1["Index 1: PSTN<br/>Network If: Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>SIP Provider AU / SIP Provider US"]
+            SIP0["Index 0: Internal (LAN)<br/>Network If: OAMP+Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>Downstream SBCs, PBX/Radio, Other Proxy"]
+            SIP1["Index 1: PSTN<br/>Network If: OAMP+Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>SIP Provider AU / SIP Provider US"]
             SIP2["Index 2: External (WAN)<br/>Network If: External (WAN) | TLS: 5061<br/>Media Realm: M365_Media_Realm<br/>Teams Direct Routing (TLS Context: Teams)"]
         end
 
@@ -3768,12 +3789,11 @@ flowchart TB
     EG1 -.-> IPIF0
     EG2 -.-> IPIF1
     EG3 -.-> IPIF2
-    EG4 -.-> IPIF3
 
-    IPIF1 -.-> MR0
-    IPIF2 -.-> MR1
-    IPIF1 -.-> MR2
-    IPIF1 -.-> MR3
+    IPIF0 -.-> MR0
+    IPIF1 -.-> MR1
+    IPIF0 -.-> MR2
+    IPIF0 -.-> MR3
 
     MR0 -.-> SIP0
     MR2 -.-> SIP1
@@ -3800,27 +3820,26 @@ flowchart TB
 
         subgraph PhysicalPorts["PHYSICAL PORTS (Front Panel)"]
             direction TB
-            GE1["GE_1 → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN<br/>→ Admin Access, OVOC, LDAP"]
-            GE2["GE_2 → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Registered Endpoints"]
-            GE3["GE_3 → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN (Dedicated)<br/>→ HA Heartbeat, State Sync"]
+            GE1["GE_1 → Ethernet Group 1 (OAMP + Internal)<br/>→ OAMP + Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Admin Access, OVOC, LDAP,<br/>Proxy SBC, Registered Endpoints"]
+            GE2["GE_2 → Ethernet Group 2 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN (Dedicated)<br/>→ HA Heartbeat, State Sync"]
+            GE3["GE_3 → (Unused / Spare)"]
             GE4["GE_4 → (Unused / Spare)"]
         end
 
         subgraph IPInterfaces["IP INTERFACES"]
             direction TB
-            IP0["Index 0: Management<br/>Type: OAMP | Ethernet Device: Group_1<br/>→ HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636)"]
-            IP1["Index 1: Internal (LAN)<br/>Type: Media+Control | Ethernet Device: Group_2<br/>→ SIP UDP 5060, RTP to Proxy SBC and Endpoints"]
-            IP2["Index 2: HA<br/>Type: Maintenance | Ethernet Device: Group_3<br/>→ HA Heartbeat and State Synchronization"]
+            IP0["Index 0: OAMP + Internal (LAN)<br/>Type: OAMP+Media+Control | Ethernet Device: Group_1<br/>→ HTTPS (443), SSH (22), SNMP, Syslog, LDAPS (636),<br/>SIP UDP 5060, RTP to Proxy SBC and Endpoints"]
+            IP1["Index 1: HA<br/>Type: Maintenance | Ethernet Device: Group_2<br/>→ HA Heartbeat and State Synchronization"]
         end
 
         subgraph MediaRealms["MEDIA REALMS"]
             direction TB
-            MR0["Index 0: Internal_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP (Unencrypted) to Proxy SBC and Registered Endpoints"]
+            MR0["Index 0: Internal_Media_Realm<br/>Interface: OAMP + Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP (Unencrypted) to Proxy SBC and Registered Endpoints"]
         end
 
         subgraph SIPInterfaces["SIP INTERFACES"]
             direction TB
-            SIP0["Index 0: Internal (LAN)<br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
+            SIP0["Index 0: Internal (LAN)<br/>Network If: OAMP + Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
         end
 
         subgraph IPGroups["IP GROUPS (TRUNK DEFINITIONS)"]
@@ -3833,9 +3852,8 @@ flowchart TB
     %% Connections showing logical flow
     GE1 --> IP0
     GE2 --> IP1
-    GE3 --> IP2
 
-    IP1 --> MR0
+    IP0 --> MR0
     MR0 --> SIP0
     SIP0 --> IPG1
     SIP0 --> IPG2
@@ -3849,9 +3867,9 @@ flowchart TB
     classDef groups fill:#fce4ec,stroke:#c2185b,color:#000
     classDef unused fill:#eeeeee,stroke:#9e9e9e,color:#666
 
-    class GE1,GE2,GE3 ports
-    class GE4 unused
-    class IP0,IP1,IP2 interfaces
+    class GE1,GE2 ports
+    class GE3,GE4 unused
+    class IP0,IP1 interfaces
     class MR0 realms
     class SIP0 sipif
     class IPG1,IPG2 groups
@@ -3869,22 +3887,22 @@ flowchart TB
 
         subgraph PhysicalPorts["PHYSICAL PORTS (Front Panel)"]
             direction TB
-            GE1["GE_1 → Ethernet Group 1 (OAMP)<br/>→ Management Interface<br/>→ Management VLAN"]
-            GE2["GE_2 → Ethernet Group 2 (Media + Control)<br/>→ Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Proxy SBC, Endpoints, Local PSTN<br/>(Also used for PSTN LBO)"]
-            GE3["GE_3 → Ethernet Group 3 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN"]
+            GE1["GE_1 → Ethernet Group 1 (OAMP + Internal)<br/>→ OAMP + Internal (LAN) Interface<br/>→ Internal/Voice VLAN<br/>→ Admin, OVOC, Proxy SBC, Endpoints,<br/>Local PSTN (Also used for PSTN LBO)"]
+            GE2["GE_2 → Ethernet Group 2 (Maintenance)<br/>→ HA Interface<br/>→ HA VLAN"]
+            GE3["GE_3 → (Unused / Spare)"]
             GE4["GE_4 → (Unused / Spare)"]
         end
 
         subgraph MediaRealms["MEDIA REALMS"]
             direction TB
-            MR0["Index 0: Internal_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Proxy SBC and Registered Endpoints"]
-            MR1["Index 1: PSTN_Media_Realm<br/>Interface: Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Local PSTN Provider (Local Breakout)"]
+            MR0["Index 0: Internal_Media_Realm<br/>Interface: OAMP + Internal (LAN) | Ports: XXXX-XXXX | Sessions: 1000<br/>→ RTP to Proxy SBC and Registered Endpoints"]
+            MR1["Index 1: PSTN_Media_Realm<br/>Interface: OAMP + Internal (LAN) | Ports: XXXX-XXXX | Sessions: 500<br/>→ RTP to Local PSTN Provider (Local Breakout)"]
         end
 
         subgraph SIPInterfaces["SIP INTERFACES"]
             direction TB
-            SIP0["Index 0: Internal (LAN)<br/>Network If: Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
-            SIP1["Index 1: PSTN<br/>Network If: Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>→ Local PSTN Provider (SIP Trunk for Local Breakout)"]
+            SIP0["Index 0: Internal (LAN)<br/>Network If: OAMP + Internal (LAN) | UDP: 5060<br/>Media Realm: Internal_Media_Realm<br/>→ Proxy SBC Upstream, Registered SIP Endpoints"]
+            SIP1["Index 1: PSTN<br/>Network If: OAMP + Internal (LAN) | UDP: 5062<br/>Media Realm: PSTN_Media_Realm<br/>→ Local PSTN Provider (SIP Trunk for Local Breakout)"]
         end
 
         subgraph IPGroups["IP GROUPS (TRUNK DEFINITIONS)"]
@@ -3896,8 +3914,8 @@ flowchart TB
     end
 
     %% Connections showing logical flow
-    GE2 --> MR0
-    GE2 --> MR1
+    GE1 --> MR0
+    GE1 --> MR1
 
     MR0 --> SIP0
     MR1 --> SIP1
@@ -4159,7 +4177,7 @@ flowchart LR
         direction TB
 
         subgraph ExtPort["External Interface"]
-            WAN["🔴 eth2 - WAN<br/>─────────────<br/>SIP Interface: External<br/>+ PSTN<br/>─────────────<br/>Media: M365 + PSTN"]
+            WAN["🔴 eth1 - WAN<br/>─────────────<br/>SIP Interface: External<br/>+ PSTN<br/>─────────────<br/>Media: M365 + PSTN"]
         end
 
         subgraph Core["Call Processing Engine"]
@@ -4167,16 +4185,12 @@ flowchart LR
             Process["Inspect & Route Calls<br/>• Validate caller<br/>• Apply policies<br/>• Convert protocols"]
         end
 
-        subgraph IntPort["Internal Interface"]
-            LAN["🟢 eth1 - LAN<br/>─────────────<br/>SIP Interface: Internal<br/>─────────────<br/>Media: Internal + LMO"]
-        end
-
-        subgraph MgmtPort["Management"]
-            MGMT["⚪ eth0 - OAMP<br/>Admin Access"]
+        subgraph IntPort["OAMP + Internal Interface"]
+            LAN["🟢 eth0 - OAMP + LAN<br/>─────────────<br/>SIP Interface: Internal<br/>Admin: HTTPS, SSH, SNMP<br/>─────────────<br/>Media: Internal + LMO"]
         end
 
         subgraph HAPort["HA Interface"]
-            HA["🔵 eth3 - HA<br/>Sync to Standby"]
+            HA["🔵 eth2 - HA<br/>Sync to Standby"]
         end
     end
 
@@ -4226,7 +4240,6 @@ flowchart LR
     class WAN wan
     class LAN lan
     class HA,Backup ha
-    class MGMT mgmt
     class Process process
     class Downstream,Phones internal
 ```
@@ -4235,18 +4248,16 @@ flowchart LR
 
 | Interface | Port | IP Interface | SIP Interface(s) | Media Realm(s) | Connects To |
 |-----------|------|--------------|------------------|----------------|-------------|
-| **eth0** | GE_1 | OAMP | N/A | N/A | OVOC, Stack Manager (management only) |
-| **eth1** | GE_2 | LAN | Internal | Internal, LMO | Downstream SBCs, IP Phones |
-| **eth2** | GE_3 | WAN | External, PSTN | M365, PSTN | Teams (bidirectional), SIP Provider (outbound) |
-| **eth3** | GE_4 | HA | N/A | N/A | Standby SBC (heartbeat & state sync) |
+| **eth0** | GE_1 | OAMP + LAN | Internal | Internal, LMO, PSTN | OVOC, Stack Manager, Downstream SBCs, IP Phones, SIP Provider |
+| **eth1** | GE_2 | WAN | External | M365 | Teams (bidirectional) |
+| **eth2** | GE_3 | HA | N/A | N/A | Standby SBC (heartbeat & state sync) |
 
 **Key Concepts:**
-- **eth2 (WAN)** - The external interface handles TWO types of traffic:
+- **eth0 (OAMP + LAN)** - Combined management and internal interface carrying admin access (HTTPS, SSH, SNMP) and internal SIP signalling/media for branch offices, phones, and SIP providers
+- **eth1 (WAN)** - The external interface handles TWO types of traffic:
   - **Microsoft Teams**: Bidirectional (Teams calls in, your calls out to Teams)
   - **SIP Provider**: Outbound only (SBC registers with carrier; carrier sends calls back on same connection)
-- **eth1 (LAN)** - Internal interface for your branch offices and phones
-- **eth0 (OAMP)** - Management interface for admin access (not call traffic)
-- **eth3 (HA)** - Dedicated link to keep the Standby SBC synchronized
+- **eth2 (HA)** - Dedicated link to keep the Standby SBC synchronized
 
 ---
 
@@ -4278,18 +4289,16 @@ flowchart TB
         subgraph HAPair["HA Pair"]
             direction LR
             subgraph Active["🟢 Active SBC"]
-                A_MGMT["eth0 OAMP"]
-                A_WAN["eth2 WAN<br/>SIP: External+PSTN<br/>Media: M365+PSTN"]
+                A_LAN["eth0 OAMP+LAN<br/>SIP: Internal<br/>Media: Internal+LMO<br/>Admin: HTTPS, SSH"]
+                A_WAN["eth1 WAN<br/>SIP: External+PSTN<br/>Media: M365+PSTN"]
                 A_Core["Call<br/>Engine"]
-                A_LAN["eth1 LAN<br/>SIP: Internal<br/>Media: Internal+LMO"]
-                A_HA["eth3 HA"]
+                A_HA["eth2 HA"]
             end
             subgraph Stand["🔵 Standby SBC"]
-                S_MGMT["eth0"]
-                S_WAN["eth2"]
+                S_LAN["eth0"]
+                S_WAN["eth1"]
                 S_Core["Call<br/>Engine"]
-                S_LAN["eth1"]
-                S_HA["eth3"]
+                S_HA["eth2"]
             end
         end
 
@@ -4299,13 +4308,9 @@ flowchart TB
             RT["AWS Route Table<br/>VIP → Active ENI"]
         end
 
-        %% LAN Subnet
-        subgraph LANSubnet["LAN Subnet (Private) - Internal Interface"]
+        %% Internal Subnet (combined OAMP + LAN)
+        subgraph LANSubnet["Internal Subnet (Private) - OAMP + LAN Interface"]
             LANgw["Gateway to<br/>On-Premises"]
-        end
-
-        %% Management Subnet
-        subgraph MgmtSubnet["Management Subnet - OAMP Interface"]
             OVOC["OVOC"]
             StackMgr["Stack Manager"]
         end
@@ -4329,8 +4334,8 @@ flowchart TB
     %% Management traffic
     M365 -->|"HTTPS"| OVOC
     OVOC -->|"HTTPS"| M365
-    OVOC --> A_MGMT
-    StackMgr --> A_MGMT
+    OVOC --> A_LAN
+    StackMgr --> A_LAN
 
     %% EIP to WAN interface
     EIP --- A_WAN
@@ -4371,7 +4376,6 @@ flowchart TB
     class Teams,M365 cloud
     class SIP sip
     class A_WAN,A_Core,A_LAN,A_HA active
-    class A_MGMT,S_MGMT mgmt
     class S_WAN,S_Core,S_LAN,S_HA,Stand standby
     class VIP,RT ha
     class EIP,LANgw subnet
@@ -4388,9 +4392,9 @@ flowchart TB
 
 | Appliance | Physical Ports | Ethernet Groups | IP Interfaces | Media Realms | SIP Interfaces | External Connectivity |
 |-----------|---------------|-----------------|---------------|--------------|----------------|----------------------|
-| **Proxy SBC (AWS)** | GE_1-GE_8 (Virtual) | 4 (Mgmt, Internal, External, HA) | 4 (OAMP, LAN, WAN, HA) | 4 (Internal, M365, PSTN, LMO) | 3 (Internal, PSTN, External) | Teams, SIP Provider AU/US, Downstream SBCs |
-| **Downstream SBC** | GE_1-GE_4 | 3 (Mgmt, Internal, HA) | 3 (OAMP, LAN, HA) | 1 (Internal) | 1 (Internal) | Proxy SBC, Registered Endpoints |
-| **Downstream SBC (LBO)** | GE_1-GE_4 | 3 (Mgmt, Internal, HA) | 3 (OAMP, LAN, HA) | 2 (Internal, PSTN) | 2 (Internal, PSTN) | Proxy SBC, Registered Endpoints, Local PSTN |
+| **Proxy SBC (AWS)** | GE_1-GE_8 (Virtual) | 3 (OAMP+Internal, External, HA) | 3 (OAMP+LAN, WAN, HA) | 4 (Internal, M365, PSTN, LMO) | 3 (Internal, PSTN, External) | Teams, SIP Provider AU/US, Downstream SBCs |
+| **Downstream SBC** | GE_1-GE_4 | 2 (OAMP+Internal, HA) | 2 (OAMP+LAN, HA) | 1 (Internal) | 1 (Internal) | Proxy SBC, Registered Endpoints |
+| **Downstream SBC (LBO)** | GE_1-GE_4 | 2 (OAMP+Internal, HA) | 2 (OAMP+LAN, HA) | 2 (Internal, PSTN) | 2 (Internal, PSTN) | Proxy SBC, Registered Endpoints, Local PSTN |
 | **OVOC** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, Microsoft Graph API, Endpoints |
 | **ARM Configurator** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, ARM Routers, Microsoft Graph |
 | **ARM Router** | eth0 (ENI) | 1 | 1 | N/A | N/A | ARM Configurator, SBCs |
@@ -4414,6 +4418,7 @@ flowchart TB
 | 1.7 | February 2026 | KS | Added comprehensive interface mapping diagrams (Appendix D.8) showing all physical ports, ethernet groups, IP interfaces, media realms, SIP interfaces, and IP groups for all appliances: Proxy SBC (AWS), Downstream SBC, Downstream SBC with LBO, OVOC, ARM Configurator, ARM Router, and Stack Manager; Added end-to-end connectivity map showing complete solution architecture across AU and US regions |
 | 1.8 | February 2026 | KS | Comprehensive review and correction pass: Fixed 4 broken mermaid diagrams (D.1 arrow directions, D.2 orphaned nodes, D.5 invalid bidirectional arrows, D.8.5 duplicate node IDs); Resolved Stack Manager role contradiction across 7 locations (does not manage active HA failover); Fixed QoE port inconsistency (5000→5001); Corrected network interface mapping from 2-ENI to 4-ENI; Standardised TLS Context name to "Teams"; Fixed firewall protocol TCP→UDP for internal SIP signalling; Updated OVOC storage from GP2 to GP3; Added SIP Provider node to D.1 diagram; Updated certificate notes (Baltimore CyberTrust Root expiry, DigiCert G3 clarification, EKU enforcement timeline); Added previous-generation instance notes for r4/m4 families; Fixed revertive-mode description; Standardised spelling to British/Australian English; Aligned Appendix C storage sizes with main document; Fixed formatting inconsistencies |
 | 1.9 | February 2026 | KS | Consolidated Stack Manager deployment to Australian region only: Removed Stack Manager from US region (us-east-1); Australian Stack Manager now manages all regions via cross-region AWS API calls; Updated production VM count from 10 to 9; Removed US Stack Manager break glass account; Updated D.3 production diagram, D.4 subnet diagram, deployment phases, IAM policy notes, Section 9/18/20/21, Appendix A/B/C; Updated all tables, checklists, and credentials references to reflect single-region Stack Manager model |
+| 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added External Publishing Pattern documentation (dedicated EIP + AWS Security Group L4 rules, no reverse proxy); Added Cloud East-West Firewall section for internal traffic inspection; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
 
 ---
 
