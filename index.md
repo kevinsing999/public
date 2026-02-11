@@ -7,7 +7,7 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 2.0
+**Document Version:** 2.1
 **Date:** February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -587,7 +587,6 @@ All AudioCodes components require integration with Microsoft Entra ID (formerly 
 | AudioCodes-ARM-WebUI | ARM | Web UI authentication |
 | AudioCodes-ARM-REST-API | ARM | REST API authentication |
 | AudioCodes-SBC-DirectRouting | SBC | Teams Direct Routing SBA (if applicable) |
-| AudioCodes-SBC-Management | Proxy SBC | Web UI OAuth authentication (see [Section 10.4](#104-sbc-management-authentication)) |
 
 ---
 
@@ -1065,7 +1064,7 @@ AudioCodes SBCs implement a built-in role hierarchy for administrative access co
 
 ### 10.4 SBC Management Authentication
 
-This section describes the authentication architecture for SBC management access, implementing a split identity model where Proxy SBCs (AWS) authenticate against Microsoft Entra ID and Downstream SBCs (on-premises) authenticate against on-premises Active Directory.
+This section describes the authentication architecture for SBC management access. All SBCs — both Proxy (AWS) and Downstream (on-premises) — authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636).
 
 #### Authentication Architecture Overview
 
@@ -1075,10 +1074,6 @@ flowchart TB
         style cloud fill:#e6f3ff,stroke:#0066cc,stroke-width:2px
 
         proxy["Proxy SBC<br/>(HA Pair)"]
-        entra["Microsoft Entra ID<br/>(Azure AD)"]
-
-        proxy -->|"OAuth"| entra
-        entra -->|"OAuth"| proxy
     end
 
     subgraph onprem["ON-PREMISES"]
@@ -1086,100 +1081,35 @@ flowchart TB
 
         downstream["Downstream<br/>SBCs"]
         ad["Active Directory<br/>Domain Controllers"]
-
-        downstream -->|"LDAPS"| ad
-        ad -->|"LDAPS"| downstream
     end
+
+    proxy -->|"LDAPS (636)<br/>via Direct Connect"| ad
+    ad -->|"LDAPS (636)"| proxy
+    downstream -->|"LDAPS (636)"| ad
+    ad -->|"LDAPS (636)"| downstream
 
     proxy -->|"Direct Connect"| downstream
     downstream -->|"Direct Connect"| proxy
 
     style proxy fill:#99ccff,stroke:#0066cc,stroke-width:2px
-    style entra fill:#0078d4,stroke:#005a9e,stroke-width:2px,color:#fff
     style downstream fill:#ffcc99,stroke:#cc6600,stroke-width:2px
     style ad fill:#ff9933,stroke:#cc6600,stroke-width:2px,color:#fff
 ```
 
-**Rationale for Split Identity Model:**
+**Rationale for Unified On-Premises AD Authentication:**
 
-| Component | Identity Provider | Rationale |
-|-----------|------------------|-----------|
-| Proxy SBC (AWS) | Microsoft Entra ID | Cloud-native authentication; internet-accessible management; aligns with Teams Direct Routing integration |
-| Downstream SBC (On-prem) | On-premises Active Directory | Offline resilience during cloud or WAN outages; local authentication ensures continued management access |
+| Factor | Decision |
+|--------|----------|
+| **Consistency** | Using the same identity provider (on-premises AD) for all SBCs eliminates identity model mismatch between Proxy and Downstream SBCs. A single set of AD security groups, service accounts, and authentication policies apply uniformly across the entire SBC fleet. |
+| **WAN Resilience** | If a Downstream SBC loses connectivity to the WAN (and therefore to the cloud identity provider), Entra ID-based authentication would fail, locking administrators out of the device. On-premises AD remains reachable via the local network, ensuring continued management access regardless of WAN status. |
+| **Proxy SBC Resilience** | The Proxy SBC in AWS authenticates to on-premises Domain Controllers via AWS Direct Connect. If Direct Connect fails, the break glass local account provides emergency access. This is preferred over depending on Entra ID, which would create an inconsistent authentication model. |
+| **Operational Simplicity** | A single authentication model reduces operational complexity — one set of group naming conventions, one LDAP configuration template, one service account pattern across all SBCs. |
 
-#### Proxy SBC: Microsoft Entra ID (OAuth 2.0) Configuration
+> **Note on MFA:** On-premises Active Directory (LDAPS) authentication does not support multi-factor authentication (MFA) natively on the SBC management interface. Unlike Entra ID (OAuth 2.0), which supports Conditional Access policies and MFA enforcement, LDAPS authentication relies on username/password credentials only. This is an accepted trade-off for the resilience and consistency benefits described above. OVOC and ARM continue to use Microsoft Entra ID authentication, which supports MFA via Conditional Access (see Section 6).
 
-The Proxy SBC uses OAuth 2.0 authentication via Microsoft Entra ID for web-based management access. This requires a dedicated App Registration separate from other AudioCodes component registrations.
+#### All SBCs: On-Premises Active Directory (LDAPS) Configuration
 
-##### App Registration: SBC Management
-
-1. Navigate to **Azure Portal** > **Microsoft Entra ID** > **App registrations** > **New registration**
-2. Configure:
-   - **Name:** `AudioCodes-SBC-Management`
-   - **Supported account types:** Accounts in this organizational directory only (Single tenant)
-   - **Redirect URI:** Web - `https://<proxy-sbc-fqdn>/api/v1/auth/oauth2/callback`
-3. Click **Register**
-
-##### Credentials to Capture
-
-| Credential | Location | Usage |
-|------------|----------|-------|
-| Application (Client) ID | Overview blade | SBC OAuth configuration |
-| Directory (Tenant) ID | Overview blade | SBC OAuth configuration |
-| Client Secret | Certificates & secrets blade | SBC OAuth configuration |
-
-##### Client Secret Creation
-
-1. Navigate to **Certificates & secrets** > **Client secrets** > **New client secret**
-2. Description: `SBC-Management-OAuth`
-3. Expiry: Select appropriate expiry (recommend 24 months with calendar reminder)
-4. **IMPORTANT:** Copy the secret value immediately - it cannot be retrieved later
-
-##### Token Configuration
-
-1. Navigate to **Token configuration** > **Add optional claim**
-2. Token type: **ID**
-3. Select claims: `email`, `preferred_username`, `groups`
-4. Click **Add**
-
-##### Entra ID Security Groups for Role Mapping
-
-Create the following security groups in Microsoft Entra ID for SBC role assignment:
-
-| Entra ID Group | SBC Role | Description |
-|----------------|----------|-------------|
-| `SG-SBC-SecurityAdmin` | Security Administrator | Full security and configuration control |
-| `SG-SBC-Admin` | Administrator | Configuration and operations access |
-| `SG-SBC-Monitor` | Monitor | Read-only access to configuration and status |
-
-##### SBC OAuth Configuration
-
-Configure OAuth on the Proxy SBC via **Setup** > **Administration** > **Web & CLI** > **OAuth Settings**:
-
-| Parameter | Value |
-|-----------|-------|
-| OAuth Mode | Enabled |
-| Provider | Azure AD |
-| Client ID | `<Application (Client) ID>` |
-| Client Secret | `<Client Secret Value>` |
-| Tenant ID | `<Directory (Tenant) ID>` |
-| Redirect URI | `https://<proxy-sbc-fqdn>/api/v1/auth/oauth2/callback` |
-
-##### SBC Group-to-Role Mapping
-
-Configure role mapping via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **OAuth Group Mapping**:
-
-| Group Object ID | Assigned Role |
-|-----------------|---------------|
-| `<SG-SBC-SecurityAdmin Object ID>` | Security Administrator |
-| `<SG-SBC-Admin Object ID>` | Administrator |
-| `<SG-SBC-Monitor Object ID>` | Monitor |
-
-> **Note:** Use the Entra ID Group Object ID (GUID), not the display name.
-
-#### Downstream SBC: On-Premises Active Directory (LDAPS) Configuration
-
-Downstream SBCs authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636). This ensures continued management access during cloud outages or Direct Connect failures.
+All SBCs authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636). This ensures continued management access during cloud outages, WAN failures, or identity provider disruptions.
 
 ##### Prerequisites
 
@@ -1274,10 +1204,10 @@ Local break glass accounts provide emergency access when identity providers are 
 
 **When to use break glass accounts:**
 
-- Microsoft Entra ID unavailable (Proxy SBC)
-- Active Directory Domain Controllers unreachable (Downstream SBC)
-- OAuth or LDAP misconfiguration preventing authentication
-- Network connectivity issues to identity providers
+- Active Directory Domain Controllers unreachable (all SBCs)
+- LDAP misconfiguration preventing authentication
+- Network connectivity issues (e.g., Direct Connect failure for Proxy SBC)
+- Domain Controller maintenance or outage
 
 #### Network and Security Requirements
 
@@ -1287,17 +1217,7 @@ Ensure the following firewall rules are in place (see [Section 16: Firewall Rule
 
 | Source | Destination | Port | Protocol | Purpose |
 |--------|-------------|------|----------|---------|
-| Proxy SBC | Microsoft Entra ID (Internet) | 443 | TCP/HTTPS | OAuth token requests |
-| Downstream SBC | Domain Controllers | 636 | TCP/LDAPS | LDAP authentication |
-
-##### Entra ID Network Endpoints
-
-The Proxy SBC requires outbound HTTPS access to Microsoft Entra ID endpoints:
-
-| Endpoint | Purpose |
-|----------|---------|
-| `login.microsoftonline.com` | OAuth authentication |
-| `graph.microsoft.com` | Group membership queries (if configured) |
+| All SBCs (Proxy + Downstream) | Domain Controllers | 636 | TCP/LDAPS | LDAP authentication |
 
 ##### LDAPS Network Path Security
 
@@ -2933,11 +2853,34 @@ The SBCs require their own IAM role to perform route table updates during HA fai
 
 ---
 
-## 21. Cyber Security Variation: Stack Manager Component
+## 21. Cyber Security Considerations
 
 ### Overview
 
-The **AudioCodes Stack Manager** is a new infrastructure component introduced to support High Availability SBC deployments across multiple AWS Availability Zones. A single Stack Manager instance is deployed per environment in the Australian region (ap-southeast-2), managing SBC HA stacks in both Australian and US regions via cross-region AWS API calls. This section documents the security considerations, permissions, and risk assessment required for cyber security approval.
+This section consolidates cyber security considerations for the AudioCodes SBC infrastructure on AWS. It covers the overall security architecture, external publishing patterns, authentication model, and component-specific risk assessments required for cyber security approval.
+
+### Security Architecture Summary
+
+The solution employs two distinct external publishing patterns and a unified authentication model:
+
+| Aspect | SBC (Proxy) | OVOC / ARM | Stack Manager |
+|--------|------------|------------|---------------|
+| **External Publishing** | Bespoke: Dedicated EIP + AWS Security Group L4 (no cloud firewall on external side) | Traditional: Cloud firewall + reverse proxy | None (private subnet only) |
+| **Internal Traffic** | Cloud east-west firewall inspection on internal subnet | Cloud east-west firewall inspection on internal subnet | Private subnet, NAT Gateway egress |
+| **Authentication** | On-premises Active Directory (LDAPS) | Microsoft Entra ID (OAuth 2.0) | Local + SSH key-based |
+| **MFA** | Not supported (LDAPS limitation) | Supported via Entra Conditional Access | N/A |
+
+**Key Design Decisions:**
+
+- **SBC external interface is not firewalled:** The SBC's WAN ENI uses a dedicated Elastic IP with AWS Security Group (L4) rules only. SIP/TLS and SRTP/RTP protocols require direct IP connectivity — reverse proxies and Layer 7 firewalls are incompatible with real-time voice protocols. The SBC provides its own application-layer VoIP firewall for SIP message inspection and rate limiting. See Section 5 External Publishing Patterns for full details.
+- **OVOC uses traditional ingress:** OVOC is published via cloud firewall + reverse proxy for inbound Microsoft 365 webhook traffic and admin access. See Section 5 External Publishing Patterns.
+- **All SBCs use on-premises AD:** Both Proxy and Downstream SBCs authenticate against on-premises Active Directory (LDAPS) for consistency, WAN resilience, and operational simplicity. MFA is not available with this model — this is an accepted trade-off. See Section 10.4 for full details.
+- **OVOC and ARM use Entra ID:** These components use Microsoft Entra ID (OAuth 2.0) with Conditional Access and MFA support. See Section 6 for app registrations.
+- **Cloud east-west firewall:** All internal/private-side traffic traverses a cloud east-west firewall for inspection. The SBC's external WAN interface does not traverse this firewall. See Section 5 Cloud East-West Firewall.
+
+### Stack Manager Component
+
+The **AudioCodes Stack Manager** is a new infrastructure component introduced to support High Availability SBC deployments across multiple AWS Availability Zones. A single Stack Manager instance is deployed per environment in the Australian region (ap-southeast-2), managing SBC HA stacks in both Australian and US regions via cross-region AWS API calls.
 
 ### Component Classification
 
@@ -3028,27 +2971,13 @@ For enhanced security posture, consider restricting the `ec2:*` permission to sp
 }
 ```
 
-### Network Security Requirements
+### Network Placement
 
-#### Inbound Traffic
-
-| Source | Protocol | Port | Purpose |
-|--------|----------|------|---------|
-| Admin CIDR | TCP | 22 | SSH Management |
-| Admin CIDR | TCP | 443 | HTTPS Web Management |
-
-#### Outbound Traffic
-
-| Destination | Protocol | Port | Purpose |
-|-------------|----------|------|---------|
-| AWS API Endpoints | TCP | 443 | EC2, CloudFormation, IAM API calls |
-| VPC CIDR | All | All | Communication with SBC instances |
-
-#### Network Placement
-
-- **Recommended:** Place in management subnet with NAT Gateway egress
+- **Recommended:** Place in internal subnet with NAT Gateway egress
 - **Not Recommended:** Direct internet exposure via public IP
 - **Alternative:** Use VPC Endpoints (PrivateLink) for AWS API access to eliminate internet egress requirement
+
+> **Note:** For Stack Manager Security Group rules, see Section 5.3 Security Groups.
 
 ### Security Considerations
 
@@ -4450,6 +4379,7 @@ flowchart TB
 | 1.8 | February 2026 | KS | Comprehensive review and correction pass: Fixed 4 broken mermaid diagrams (D.1 arrow directions, D.2 orphaned nodes, D.5 invalid bidirectional arrows, D.8.5 duplicate node IDs); Resolved Stack Manager role contradiction across 7 locations (does not manage active HA failover); Fixed QoE port inconsistency (5000→5001); Corrected network interface mapping from 2-ENI to 4-ENI; Standardised TLS Context name to "Teams"; Fixed firewall protocol TCP→UDP for internal SIP signalling; Updated OVOC storage from GP2 to GP3; Added SIP Provider node to D.1 diagram; Updated certificate notes (Baltimore CyberTrust Root expiry, DigiCert G3 clarification, EKU enforcement timeline); Added previous-generation instance notes for r4/m4 families; Fixed revertive-mode description; Standardised spelling to British/Australian English; Aligned Appendix C storage sizes with main document; Fixed formatting inconsistencies |
 | 1.9 | February 2026 | KS | Consolidated Stack Manager deployment to Australian region only: Removed Stack Manager from US region (us-east-1); Australian Stack Manager now manages all regions via cross-region AWS API calls; Updated production VM count from 10 to 9; Removed US Stack Manager break glass account; Updated D.3 production diagram, D.4 subnet diagram, deployment phases, IAM policy notes, Section 9/18/20/21, Appendix A/B/C; Updated all tables, checklists, and credentials references to reflect single-region Stack Manager model |
 | 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added dual External Publishing Patterns: SBC uses bespoke dedicated EIP + Security Group L4 (no firewall), OVOC uses traditional cloud firewall + reverse proxy ingress; Added Cloud East-West Firewall section for internal traffic inspection; Updated OVOC Security Group and prerequisites for reverse proxy ingress; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
+| 2.1 | February 2026 | KS | Unified SBC authentication to on-premises Active Directory (LDAPS) for all SBCs: Removed split identity model where Proxy SBC used Microsoft Entra ID (OAuth 2.0); All SBCs now use on-prem AD for consistency, WAN resilience, and operational simplicity; Documented MFA limitation as accepted trade-off; Removed AudioCodes-SBC-Management app registration; OVOC and ARM retain Entra ID authentication with MFA support; Broadened Section 21 from Stack Manager-only to comprehensive Cyber Security Considerations with security architecture summary, publishing patterns, and authentication model overview; Removed duplicate network security requirements from Section 21 (consolidated to Section 5.3) |
 
 ---
 
