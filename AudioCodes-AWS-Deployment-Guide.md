@@ -2940,6 +2940,83 @@ OVOC PostgreSQL (dbems)
 
 > **CRITICAL:** Monitor for failed ETL extractions. A missed extraction means that day's data is permanently lost. Configure alerting on ETL job failures with escalation to the operations team.
 
+#### CDR Access Auditing — Who Accessed What
+
+A key compliance question is: **can the organisation log and audit who has accessed CDR data through the Analytics API?**
+
+**OVOC does not natively log individual SQL queries** made through the Analytics API. The OVOC application-level audit trail (Actions Journal) covers GUI-based operator actions but does not extend to raw SQL sessions initiated via the PostgreSQL direct-access interface (port 5432). This means that if someone connects with the `analytics` user and runs SELECT queries against CDR views, OVOC itself does not record the query content.
+
+However, a layered auditing approach can be implemented to achieve compliance-grade CDR access logging:
+
+##### Layer 1: PostgreSQL Native Logging
+
+PostgreSQL's built-in logging can be configured on the OVOC server to capture all connections and SQL statements. The following `postgresql.conf` parameters are relevant:
+
+| Parameter | Recommended Value | Purpose |
+|-----------|-------------------|---------|
+| `log_connections` | `on` | Logs every connection attempt including username, database, and source IP |
+| `log_disconnections` | `on` | Logs session end with duration |
+| `log_statement` | `'all'` | Logs all SQL statements including SELECTs against CDR views |
+| `log_duration` | `on` | Logs how long each statement took |
+| `log_line_prefix` | `'%t [%p]: user=%u,db=%d,app=%a,client=%h '` | Includes timestamp, user, database, application name, and client IP in every log line |
+
+> **Appliance Caveat:** Since OVOC is a managed appliance, direct modification of `postgresql.conf` may not be officially supported by AudioCodes and could be overwritten during upgrades. Contact AudioCodes support to confirm supportability before modifying the embedded PostgreSQL configuration.
+
+##### Layer 2: pgAudit Extension (If Supportable)
+
+The **pgAudit** PostgreSQL extension provides granular, object-level audit logging that can target specific CDR views rather than logging all database activity. With pgAudit, audit entries are generated when any user runs a SELECT against a designated view (e.g., `CALLS_VIEW`), including the full SQL statement and bind parameters.
+
+pgAudit is supported natively on AWS RDS PostgreSQL and can be installed on self-hosted PostgreSQL instances. However, installing pgAudit on the OVOC embedded PostgreSQL instance would require root access and is not officially documented by AudioCodes. If the organisation replicates CDR data to an external PostgreSQL instance (e.g., in the data lake), pgAudit can be deployed there without modifying the OVOC appliance.
+
+##### Layer 3: Network-Level Logging
+
+Network-level controls provide an independent audit trail of who connected to the Analytics API:
+
+| Control | What It Captures |
+|---------|------------------|
+| **AWS VPC Flow Logs** | Source IP, destination IP (OVOC), port 5432, connection timestamps, accept/reject |
+| **Cloud East-West Firewall Logs** | Connection metadata for traffic traversing the internal firewall to OVOC |
+| **OVOC Linux auditd** | OS-level socket activity on port 5432 (when auditd is enabled via OVOC Server Manager) |
+
+##### Layer 4: Data Lake Access Auditing
+
+Since CDR data is extracted daily to the corporate data lake, the data lake tier provides a more controllable audit point:
+
+| Platform | Audit Capability |
+|----------|------------------|
+| **AWS S3 + Athena** | S3 access logging, CloudTrail data events, Athena query execution logs |
+| **Azure Data Lake + Synapse** | Azure Monitor diagnostic logs, Synapse SQL audit logs |
+| **Power BI** | Power BI audit logs capture dashboard access, report views, and data refresh events per user |
+
+For most compliance scenarios, auditing at the **data lake tier** (Layer 4) is more practical and controllable than auditing at the OVOC PostgreSQL tier (Layer 1), because the data lake supports individual user accounts, role-based access, and native audit logging — whereas OVOC provides only a single shared `analytics` account.
+
+##### Shared Account Limitation
+
+A significant limitation is that OVOC provides a **single shared `analytics` user** for all external database access. PostgreSQL logs will show `user=analytics` for every connection, making it impossible to distinguish between different human analysts or ETL service accounts at the database level alone.
+
+**Mitigations:**
+
+| Approach | How It Works |
+|----------|--------------|
+| **IP-based attribution** | If each connecting system has a known IP, `log_connections` captures the `client` field to differentiate sources |
+| **Application name tagging** | Configure each connecting tool (ETL platform, Power BI, ad-hoc clients) to set a unique `application_name` in its PostgreSQL connection string — this appears in `log_line_prefix` with `%a` |
+| **Restrict to ETL only** | Limit port 5432 access via firewall rules to the ETL platform IP only — no ad-hoc analyst access to OVOC directly. All analyst access goes through the data lake where individual user accounts and audit logging are available |
+| **Database proxy** | Deploy a PostgreSQL proxy (e.g., PgBouncer) that maps individual user credentials to the shared `analytics` backend user, logging the actual user identity at the proxy layer |
+
+##### Compliance Summary
+
+| Compliance Question | How to Answer It |
+|---------------------|------------------|
+| **Who accessed CDR data on OVOC?** | PostgreSQL `log_connections` (source IP + timestamp) combined with VPC Flow Logs and firewall logs |
+| **What CDR queries were executed?** | PostgreSQL `log_statement='all'` or pgAudit with `pgaudit.log='read'` — captures full SQL text |
+| **When was CDR data accessed?** | `log_line_prefix` with `%t` timestamp, VPC Flow Log timestamps |
+| **What data was extracted to the data lake?** | ETL job execution logs with row counts and extraction timestamps |
+| **Who accessed CDR data in the data lake?** | Data lake native audit logs (S3 access logs, Athena query logs, Synapse audit logs) |
+| **Who viewed CDR dashboards?** | Power BI audit logs per user per report |
+| **Is the audit trail tamper-proof?** | Ship logs in real-time to an immutable store (e.g., S3 with Object Lock, Azure Immutable Blob Storage) separate from the OVOC appliance |
+
+> **Recommendation:** For most organisations, the practical approach is to (1) restrict OVOC Analytics API access to the ETL platform only via firewall rules, (2) enable PostgreSQL `log_connections` on OVOC for basic connection auditing, (3) implement comprehensive audit logging at the data lake tier where individual user accounts and native audit capabilities are available, and (4) forward all logs to the organisation's SIEM for centralised audit trail and alerting.
+
 ### Licensing Prerequisite
 
 The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** license (SW/OVOC/ANALYTICS). This is separate from the base OVOC license and the Teams QoE Analytics license. See [Section 22: Licensing Considerations](#22-licensing-considerations).
