@@ -3017,6 +3017,72 @@ A significant limitation is that OVOC provides a **single shared `analytics` use
 
 > **Recommendation:** For most organisations, the practical approach is to (1) restrict OVOC Analytics API access to the ETL platform only via firewall rules, (2) enable PostgreSQL `log_connections` on OVOC for basic connection auditing, (3) implement comprehensive audit logging at the data lake tier where individual user accounts and native audit capabilities are available, and (4) forward all logs to the organisation's SIEM for centralised audit trail and alerting.
 
+#### CDR Viewing via the OVOC Web GUI — Audit Limitation
+
+**There is no native capability within OVOC to log or audit which operator viewed specific CDR records, call quality data, or QoE reports through the web GUI.** This is a platform limitation that cannot be addressed without considerable modification to the underlying operating system and web server stack.
+
+The OVOC **Actions Journal** tracks operator *actions* (configuration changes, device updates, operator management, security level changes) but does **not** track operator *page views* or *data reads*. When an operator browses CDR search results, views call quality reports, or accesses QoE dashboards through the OVOC web interface, no audit record is generated. The Journal is fundamentally a change log, not an access log.
+
+This means the organisation **cannot** answer the question *"Which operator viewed CDR data for call X on date Y?"* using OVOC's built-in features.
+
+##### Why This Limitation Exists
+
+This is a common gap across enterprise management platforms — not specific to AudioCodes. Most web applications log write operations (which are transactional and infrequent) but not read operations (which are high-volume and generate significant storage and performance overhead). OVOC's architecture uses a shared application service account for database queries, decoupling the web user session from the underlying data retrieval.
+
+##### What Cannot Be Achieved Without OS-Level Modification
+
+| Audit Question | Native OVOC Capability |
+|----------------|----------------------|
+| Which operator viewed a specific CDR record? | **Not available** |
+| When did an operator access call quality reports? | **Not available** |
+| How many CDR records did an operator view in a session? | **Not available** |
+| Did an operator search for a specific phone number? | **Not available** |
+| Which operator exported CDR data from the GUI? | **Not available** |
+
+##### Mitigations
+
+The following compensating controls can reduce the risk associated with this limitation:
+
+**1. Role-Based Access Control (Preventive)**
+
+OVOC's built-in operator security levels (Admin, Operator, Monitor) and tenant-scoped access control who *can* view CDR data. While this does not log who *did* view it, it limits the population of users with access and provides a defensible answer to auditors about who *could have* accessed the data.
+
+**2. GDPR Phone Number Masking (Data Minimisation)**
+
+OVOC supports **Privacy Mode** which masks phone numbers in CDRs, call details, and QoE reports displayed in the GUI. When enabled, standard operators see masked numbers (e.g., `+61 2 9876 ****`) and cannot identify individuals from the displayed data. This reduces the classification of viewed data and makes the "who viewed what" question less critical — if users only see masked data, they have not accessed identifiable personal information.
+
+**3. Web Server Access Log Enhancement (Requires OS Modification)**
+
+OVOC runs on Apache and Tomcat. Configuring Apache access logs and Tomcat's `AccessLogValve` to capture authenticated usernames and request URLs can provide a partial audit trail showing which operators accessed CDR-related pages. However, this requires root-level modification to the OVOC server, is not officially supported by AudioCodes, and may be overwritten during OVOC upgrades.
+
+Limitations of this approach:
+- Access logs show URLs requested but not which records were in the response
+- POST-based search forms do not appear in standard access logs
+- OVOC's SPA (single-page application) architecture uses generic REST API endpoints, making URL-based analysis difficult (e.g., a CDR query may appear as `POST /api/v1/calls/search` rather than a descriptive URL)
+- No correlation between the web user and the underlying database query without significant custom engineering
+
+**4. Linux auditd (Requires OS Modification)**
+
+Enabling auditd via the OVOC Server Manager (Security > Auditd Options) captures OS-level activity including network socket connections and file access. Custom auditd rules can be written to monitor CDR-related database files or API socket connections. However, auditd operates at the kernel/syscall level and cannot correlate database queries with specific OVOC GUI user sessions without significant custom engineering.
+
+**5. Network-Level Monitoring (No OS Modification Required)**
+
+Monitoring connections to the OVOC HTTPS interface via VPC Flow Logs and cloud east-west firewall logs provides an independent record of which source IPs accessed the OVOC web GUI and when. Combined with OVOC's authentication logs (login/logout events), this can establish which operators had active sessions during a given time window — though it cannot determine what data they viewed within those sessions.
+
+**6. Reverse Proxy with Enhanced Logging (No OVOC Modification Required)**
+
+Deploying a reverse proxy (e.g., Nginx, HAProxy) in front of the OVOC web interface — separate from the OVOC appliance — can log all authenticated requests including URLs, query parameters, and authenticated usernames without modifying the OVOC server itself. This is the least invasive approach but is still subject to the SPA/REST API URL limitations described above.
+
+**7. Data Lake as the Controlled Access Point**
+
+For compliance-sensitive environments, the most practical approach is to direct all analyst and reporting access to the **data lake** (where individual user accounts, query logging, and native audit capabilities are available) rather than granting operators direct access to CDR data through the OVOC GUI. OVOC GUI access can be restricted to operational monitoring only, with phone number masking enabled for all standard operators.
+
+##### Risk Acceptance
+
+If the mitigations above are insufficient for the organisation's compliance requirements, this limitation should be documented in the risk register:
+
+> *"The OVOC platform does not provide application-level audit logging of CDR data viewing events through the web GUI. Compensating controls including role-based access control, phone number masking, network-level monitoring, and data lake access auditing reduce the residual risk. This is accepted by [Risk Owner] and will be reviewed annually or upon OVOC version upgrade."*
+
 ### Licensing Prerequisite
 
 The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** license (SW/OVOC/ANALYTICS). This is separate from the base OVOC license and the Teams QoE Analytics license. See [Section 22: Licensing Considerations](#22-licensing-considerations).
