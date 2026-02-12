@@ -182,9 +182,11 @@ The SBCs require **internet access from the HA subnet** to communicate with AWS 
 
 | Interface | Purpose | Subnet Type |
 |-----------|---------|-------------|
-| eth0 | Management + LAN/Internal (OVOC, ARM, SSH, HTTPS, Downstream SBCs, PBX, SIP Providers) | Internal Subnet |
+| eth0 | Management + LAN/Internal (OVOC, ARM, SSH, HTTPS, Downstream/Site SBCs, Third-Party PBX, ATAs, SIP Providers) | Internal Subnet |
 | eth1 | WAN/External (Microsoft Teams Direct Routing, Public SIP) | DMZ/External Subnet |
 | eth2 | HA Communication + AWS API Access | HA Subnet (dedicated) |
+
+> **SIP Connectivity Direction:** All SIP connectivity on eth0 to site SBCs, existing third-party PBX systems (e.g., Cisco CUCM, Avaya Aura, Mitel), and ATAs (Analog Telephone Adapters) is **bidirectional — both inbound and outbound**. The SBC operates as a Back-to-Back User Agent (B2BUA) with paired IP-to-IP Routing Rules configured for each direction. Inbound calls (from these entities toward the Proxy SBC) are classified via Classification Rules and Proxy Set matching; outbound calls (from the Proxy SBC toward these entities) are routed via the destination IP Group's Proxy Set. SIP signalling and RTP media flow in both directions for all connected entity types.
 
 #### SBC IAM Role Requirements
 
@@ -237,13 +239,41 @@ The SBCs require an IAM role to call AWS APIs during HA failover. The SBC direct
 
 ### Stack Manager Specifications
 
+The Stack Manager is a **Linux-based application** that can be installed on a server running a supported operating system. It is not limited to pre-built cloud marketplace images — it can be deployed on any VM or bare-metal server using a two-step process: provision a server with a supported OS, then install the Stack Manager application. This means it can also run on an organisation's **Standard Operating Environment (SOE)** OS, provided it is one of the supported distributions listed below.
+
 | Specification | Details |
 |--------------|---------|
 | **Purpose** | HA cluster deployment, lifecycle management, Day 2 operations |
-| **EC2 Instance Type** | t3.medium |
-| **Storage** | 8 GiB gp3 (default) |
+| **Type** | Linux application (Python-based, uses its own virtual environment) |
+| **EC2 Instance Type** | t3.medium (when deployed on AWS) |
+| **Minimum Resources** | 1 vCPU, 2 GB RAM, 10 GB disk |
+| **Storage** | 8 GiB gp3 (default on AWS) |
 | **Deployment** | One per environment, hosted in Australian region; manages all regions including US via cross-region AWS API calls |
 | **Lifecycle** | Retained ongoing for Day 2 operations (low cost) |
+
+#### Supported Operating Systems
+
+The Stack Manager application supports the following Linux distributions:
+
+| Distribution | Supported Versions |
+|---|---|
+| **Ubuntu** | 18.04 LTS, 20.04 LTS, 22.04 LTS, 24.04 LTS |
+| **Debian** | 10 (Buster), 11 (Bullseye), 12 (Bookworm), 13 (Trixie) |
+| **Red Hat Enterprise Linux (RHEL)** | 8, 9 |
+| **CentOS / CentOS Stream** | 8, 9 |
+| **Rocky Linux** | 8, 9 |
+| **AlmaLinux** | 8, 9 |
+| **Amazon Linux** | 2, 2023 |
+
+> **SOE Compatibility:** Organisations running RHEL 8/9, CentOS 8/Stream 9, Rocky Linux 8/9, or AlmaLinux 8/9 as their Standard Operating Environment can install Stack Manager directly on their SOE-compliant servers without requiring a separate appliance image.
+
+#### Deployment Options
+
+| Method | Description |
+|--------|-------------|
+| **Cloud Marketplace Image** | Pre-built images available in AWS AMI, Azure Marketplace, and GCP (recommended for simplicity) |
+| **Software Application Install** | Install on any VM or server running a supported OS (two-step: provision OS, then install application) |
+| **Containerised Mode** | Docker/Podman deployment mode for managing Mediant VE/CE as container images on remote hosts via SSH |
 
 #### Critical Requirements
 
