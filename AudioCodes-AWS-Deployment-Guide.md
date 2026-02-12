@@ -394,10 +394,15 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | TCP | 443 | Reverse Proxy CIDR | Graph API Webhooks (via Cloud Firewall + Reverse Proxy) |
 | Inbound | UDP | 162 | SBC CIDR | SNMP Traps |
 | Inbound | UDP | 1161 | SBC CIDR | Keep-alive (NAT traversal) |
+| Inbound | UDP | 514 | SBC CIDR | Device Syslog Ingestion (audit logging) |
 | Inbound | TCP | 5001 | SBC CIDR | QoE Reporting |
 | Inbound | TCP | 5432 | ETL Platform CIDR | Analytics API (PostgreSQL) |
 | Outbound | TCP | 443 | 0.0.0.0/0 | Microsoft Graph API |
+| Outbound | TCP | 514 | Syslog/SIEM CIDR | Audit Log Forwarding (syslog to SIEM) |
+| Outbound | UDP | 1164-1174 | NMS/SIEM CIDR | SNMP Trap Forwarding (audit events to NMS) |
 | Outbound | All | All | VPC CIDR | Internal traffic |
+
+> **Audit Logging:** OVOC provides two layers of audit logging: OS-level audit logging via Linux **auditd** (STIG-compliant, logs to `/var/log/audit/`) and application-level logging via the **Actions Journal** (tracks configuration changes, user actions, and device operations). Audit logs can be forwarded to an external SIEM (e.g., Splunk, Azure Sentinel) via syslog (TCP 514), SNMP traps (UDP 1164-1174), or the REST API (HTTPS 443). The OVOC Northbound Interface supports Syslog, SNMP (v2/v3), Email, and REST as alarm and journal forwarding destinations. Device syslog ingestion (UDP 514 inbound) allows OVOC to collect syslog messages directly from managed SBCs without requiring a separate syslog server. It is **recommended** to enable auditd and configure syslog forwarding to the organisation's SIEM for centralised audit trail and compliance reporting.
 
 ### External Publishing Patterns
 
@@ -942,7 +947,7 @@ The following table details the compute resource requirements for all components
 - Disable or block all unused services and network ports (e.g., HTTP, TFTP, FTP, Telnet, unused SIP transport) and allow only explicitly required signalling/media ranges.
 - Enable SBC VoIP firewall / classification protection features to rate limit malformed SIP, block scans, and protect from DoS/registration attacks.
 - Change default Admin/User credentials and, where possible, rename default usernames; enforce password complexity and expiry using the SBC password policy parameters.
-- Integrate management authentication with corporate LDAP/AD or RADIUS so roles are mapped from directory groups (e.g., NOC Monitor, Voice Admin, Sec Admin). See [Section 10.4: SBC Management Authentication](#104-sbc-management-authentication) for detailed configuration.
+- Integrate management authentication with a centralised RADIUS AAA server (recommended: Cisco ISE) so roles are mapped via Vendor-Specific Attributes from directory groups (e.g., NOC Monitor, Voice Admin, Sec Admin). See [Section 10.4: SBC Management Authentication](#104-sbc-management-authentication) for detailed configuration.
 - Restrict Security Administrator role to a minimal number of users; use separate named accounts (no shared logins) and enable account lockout on failed login thresholds.
 - Limit per-role Web page/CLI permissions so Monitor is strictly read only and day-to-day operations use Admin, reserving Security Admin for security and system-wide changes.
 
@@ -966,124 +971,142 @@ AudioCodes SBCs implement a built-in role hierarchy for administrative access co
 
 ### 10.4 SBC Management Authentication
 
-This section describes the authentication architecture for SBC management access. All SBCs — both Proxy (AWS) and Downstream (on-premises) — authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636).
+This section describes the authentication architecture for SBC management access. All SBCs — both Proxy (AWS) and Downstream (on-premises) — authenticate against a centralised RADIUS AAA server for management access (Web GUI, CLI/SSH).
+
+> **Note on TACACS+:** AudioCodes Mediant SBC products (including Mediant VE, Mediant 800C, Mediant 4000, and Mediant 9000) do **not** support TACACS+ for management authentication. TACACS+ is only available on the AudioCodes Mediant MSBR (Multi-Service Business Router) product line. For SBC deployments, RADIUS is the supported centralised AAA protocol. RADIUS and LDAP cannot be used simultaneously for management login — one must be chosen.
 
 #### Authentication Architecture Overview
 
 ![Diagram 5](png-diagrams/05-authentication-architecture-overview.png)
 
-**Rationale for Unified On-Premises AD Authentication:**
+**Rationale for Unified RADIUS Authentication:**
 
 | Factor | Decision |
 |--------|----------|
-| **Consistency** | Using the same identity provider (on-premises AD) for all SBCs eliminates identity model mismatch between Proxy and Downstream SBCs. A single set of AD security groups, service accounts, and authentication policies apply uniformly across the entire SBC fleet. |
-| **WAN Resilience** | If a Downstream SBC loses connectivity to the WAN (and therefore to the cloud identity provider), Entra ID-based authentication would fail, locking administrators out of the device. On-premises AD remains reachable via the local network, ensuring continued management access regardless of WAN status. |
-| **Proxy SBC Resilience** | The Proxy SBC in AWS authenticates to on-premises Domain Controllers via AWS Direct Connect. If Direct Connect fails, the break glass local account provides emergency access. This is preferred over depending on Entra ID, which would create an inconsistent authentication model. |
-| **Operational Simplicity** | A single authentication model reduces operational complexity — one set of group naming conventions, one LDAP configuration template, one service account pattern across all SBCs. |
+| **Consistency** | Using the same AAA server and protocol (RADIUS) for all SBCs eliminates authentication model mismatch between Proxy and Downstream SBCs. A single set of RADIUS policies, user groups, and authorisation profiles apply uniformly across the entire SBC fleet. |
+| **Role-Based Access Control** | RADIUS Vendor-Specific Attributes (VSAs) provide granular role mapping directly in the Access-Accept response, mapping users to Security Administrator, Administrator, or Monitor roles without requiring a separate authorisation lookup. |
+| **Centralised Audit Trail** | RADIUS accounting (RFC 2866) provides a centralised record of all management access sessions across the SBC fleet, supporting compliance and security audit requirements. |
+| **Operational Simplicity** | A single authentication model reduces operational complexity — one set of RADIUS policies, one shared secret management process, one authorisation profile pattern across all SBCs. |
 
-> **Note on MFA:** On-premises Active Directory (LDAPS) authentication does not support multi-factor authentication (MFA) natively on the SBC management interface. Unlike Entra ID (OAuth 2.0), which supports Conditional Access policies and MFA enforcement, LDAPS authentication relies on username/password credentials only. This is an accepted trade-off for the resilience and consistency benefits described above. OVOC and ARM continue to use Microsoft Entra ID authentication, which supports MFA via Conditional Access (see Section 6).
+> **Note on MFA:** RADIUS-based authentication does not natively enforce multi-factor authentication on the SBC management interface. However, the RADIUS AAA server (e.g., Cisco ISE) can be configured to proxy authentication to an identity source that supports MFA (e.g., Microsoft Entra ID via ROPC, or Duo integration). OVOC and ARM continue to use Microsoft Entra ID authentication, which supports MFA via Conditional Access (see Section 6).
 
-#### All SBCs: On-Premises Active Directory (LDAPS) Configuration
+#### Recommended AAA Server: Cisco ISE
 
-All SBCs authenticate against on-premises Active Directory Domain Controllers using LDAPS (LDAP over TLS on port 636). This ensures continued management access during cloud outages, WAN failures, or identity provider disruptions.
+**Cisco Identity Services Engine (ISE)** is recommended as the centralised RADIUS AAA server for all SBC management authentication. Cisco ISE provides:
+
+| Capability | Details |
+|------------|---------|
+| **RADIUS Server** | Full RADIUS server with custom vendor dictionary support |
+| **Custom VSA Dictionary** | Supports defining the AudioCodes vendor dictionary (Vendor ID 5003) with the `ACL-Auth-Level` attribute for role-based access |
+| **Identity Source Integration** | Authenticates users against on-premises Active Directory, Microsoft Entra ID (via ROPC), or local ISE identity stores |
+| **Policy-Based Authorisation** | Maps AD security groups to AudioCodes SBC roles (Security Administrator, Administrator, Monitor) via RADIUS authorisation profiles |
+| **Centralised Audit and Accounting** | Full RADIUS accounting logs for all management access sessions, exportable to SIEM |
+| **Licensing** | RADIUS-based device administration requires ISE **Essentials** licenses (one per concurrent RADIUS device admin session); no separate Device Administration license required for RADIUS |
+
+> **Note:** Cisco ISE is recommended based on its broad enterprise adoption, mature RADIUS VSA support, and integration with Microsoft Active Directory and Entra ID. Alternatives include Aruba ClearPass, Fortinet FortiAuthenticator, or FreeRADIUS, provided they support custom VSA dictionaries for AudioCodes (Vendor ID 5003).
+
+##### AudioCodes RADIUS VSA Dictionary for Cisco ISE
+
+Configure the following AudioCodes vendor dictionary in Cisco ISE under **Policy > Policy Elements > Dictionaries > System > Radius > Radius Vendors**:
+
+| Field | Value |
+|-------|-------|
+| **Vendor Name** | AudioCodes |
+| **IANA Vendor ID** | 5003 |
+| **Attribute Name** | ACL-Auth-Level |
+| **Attribute ID** | 35 |
+| **Data Type** | Integer |
+
+**Access Level Values (for ISE Authorisation Profiles):**
+
+| ISE Authorisation Profile | ACL-Auth-Level Value | SBC Role |
+|---------------------------|----------------------|----------|
+| `AC-SBC-SecurityAdmin` | 200 | Security Administrator — full access including security settings |
+| `AC-SBC-Admin` | 100 | Administrator — configuration and operations access |
+| `AC-SBC-Monitor` | 50 | Monitor — read-only access |
+
+##### Cisco ISE Policy Configuration
+
+Map Active Directory security groups to AudioCodes SBC roles via ISE RADIUS authorisation policies:
+
+| AD Security Group | ISE Authorisation Profile | ACL-Auth-Level | SBC Role |
+|-------------------|---------------------------|----------------|----------|
+| `SBC-SecurityAdmin` | AC-SBC-SecurityAdmin | 200 | Security Administrator |
+| `SBC-Admin` | AC-SBC-Admin | 100 | Administrator |
+| `SBC-Monitor` | AC-SBC-Monitor | 50 | Monitor |
+
+#### All SBCs: RADIUS Configuration
+
+All SBCs (Proxy and Downstream) authenticate management users via RADIUS. The SBC sends the user's credentials to the RADIUS server, which authenticates the user and returns an Access-Accept with the `ACL-Auth-Level` VSA to determine the user's role.
 
 ##### Prerequisites
 
-- Active Directory Domain Controllers with LDAPS enabled (port 636)
-- Valid TLS certificate on Domain Controllers (see Certificate Requirements below)
-- Service account for LDAP bind operations
-- AD security groups for role mapping
+- Cisco ISE (or equivalent RADIUS AAA server) deployed and reachable from all SBC management interfaces
+- AudioCodes VSA dictionary configured on the RADIUS server (Vendor ID 5003, ACL-Auth-Level attribute 35)
+- RADIUS shared secret configured on both the RADIUS server and each SBC
+- Active Directory security groups created for role mapping
+- Network connectivity from SBC management interfaces to RADIUS server (UDP 1812/1813 or legacy 1645/1646)
 
-##### LDAPS Certificate Requirements
+##### RADIUS Server Configuration
 
-| Requirement | Details |
-|-------------|---------|
-| Certificate Type | Server authentication certificate on each Domain Controller |
-| Subject/SAN | Must include DC FQDN (e.g., `dc01.corp.example.com`) |
-| Trust Chain | SBC must trust the issuing CA (import root/intermediate CA certificates) |
-| Key Usage | Digital Signature, Key Encipherment |
-| Extended Key Usage | Server Authentication (1.3.6.1.5.5.7.3.1) |
-
-##### Importing CA Certificates to SBC
-
-1. Navigate to **Setup** > **IP Network** > **Security** > **TLS Contexts**
-2. Select the management TLS context
-3. Under **Trusted Root Certificates**, click **Import**
-4. Upload the root CA certificate (and intermediate if applicable)
-5. Verify the certificate appears in the trusted list
-
-##### LDAP Server Configuration
-
-Configure LDAP on the Downstream SBC via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **LDAP**:
+Configure RADIUS on each SBC via **Setup** > **IP Network** > **AAA Servers** > **RADIUS Servers**:
 
 | Parameter | Value |
 |-----------|-------|
-| LDAP Mode | Enabled |
-| Server Type | Microsoft Active Directory |
-| Primary Server | `ldaps://dc01.corp.example.com:636` |
-| Secondary Server | `ldaps://dc02.corp.example.com:636` |
-| Bind DN | `CN=svc-sbc-ldap,OU=Service Accounts,DC=corp,DC=example,DC=com` |
-| Bind Password | `<Service Account Password>` |
-| Base DN | `DC=corp,DC=example,DC=com` |
-| User Search Filter | `(&(objectClass=user)(sAMAccountName=%s))` |
-| Connection Security | LDAPS (TLS) |
-| Verify Server Certificate | Enabled |
+| RADIUS Server 1 (Primary) | `<ISE PSN 1 IP Address>` |
+| RADIUS Server 2 (Secondary) | `<ISE PSN 2 IP Address>` |
+| Authentication Port | 1812 (change from AudioCodes default of 1645) |
+| Accounting Port | 1813 (change from AudioCodes default of 1646) |
+| Shared Secret | `<RADIUS Shared Secret>` |
+| Timeout | 5 seconds |
+| Retransmission Attempts | 3 |
 
-##### Service Account Requirements
+> **Important:** AudioCodes defaults to legacy RADIUS ports 1645/1646. Change these to the standard ports 1812/1813 to align with Cisco ISE defaults and industry standards.
 
-| Requirement | Details |
-|-------------|---------|
-| Account Type | Domain user account (not a computer account) |
-| Permissions | Read access to user objects and group membership |
-| Password Policy | Non-expiring password or managed rotation |
-| Naming Convention | `svc-sbc-ldap-<site>` (e.g., `svc-sbc-ldap-sydney`) |
-| OU Placement | Dedicated Service Accounts OU |
+##### Enable RADIUS for Management Login
 
-> **Security Note:** The bind account requires only read permissions. Do not grant write or administrative privileges.
+Configure via **Setup** > **Administration** > **Web & CLI** > **Authentication Server**:
 
-##### Active Directory Security Groups for Role Mapping
+| Parameter | Value |
+|-----------|-------|
+| Authentication Mode | RADIUS |
+| Enable RADIUS for Management Login | Enabled |
+| VSA Vendor ID | 5003 |
+| VSA Access Level Attribute | 35 |
+| Behavior upon Authentication Server Timeout | **Verify Access Locally** (enables break glass fallback) |
+| RADIUS Local Cache Timeout | 900 seconds (15 minutes) |
+| RADIUS Local Cache Mode | Reset Timer Upon Access |
 
-Create the following security groups in Active Directory for SBC role assignment:
+Equivalent CLI configuration:
 
-| AD Group | SBC Role | Description |
-|----------|----------|-------------|
-| `SBC-SecurityAdmin-<Site>` | Security Administrator | Full security and configuration control |
-| `SBC-Admin-<Site>` | Administrator | Configuration and operations access |
-| `SBC-Monitor-<Site>` | Monitor | Read-only access to configuration and status |
+```
+configure system > radius settings > enable
+configure system > radius settings > enable-mgmt-login
+configure system > radius settings > vsa-vendor-id 5003
+configure system > radius settings > vsa-access-level 35
+```
 
-> **Note:** Site-specific groups (e.g., `SBC-Admin-Sydney`) allow granular access control per location.
+##### RADIUS Message Security
 
-##### SBC Group-to-Role Mapping
+Enable RADIUS Message-Authenticator (Attribute 80) to protect against man-in-the-middle attacks on PAP-based RADIUS packets:
 
-Configure role mapping via **Setup** > **Administration** > **Web & CLI** > **Authentication Servers** > **LDAP Group Mapping**:
-
-| AD Group DN | Assigned Role |
-|-------------|---------------|
-| `CN=SBC-SecurityAdmin-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Security Administrator |
-| `CN=SBC-Admin-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Administrator |
-| `CN=SBC-Monitor-Sydney,OU=SBC Groups,DC=corp,DC=example,DC=com` | Monitor |
-
-##### Multiple Domain Controller Configuration
-
-For redundancy, configure both primary and secondary LDAP servers pointing to different Domain Controllers:
-
-| Configuration | Primary DC | Secondary DC |
-|---------------|------------|--------------|
-| Sydney Site | `dc01-syd.corp.example.com` | `dc02-syd.corp.example.com` |
-| Melbourne Site | `dc01-mel.corp.example.com` | `dc02-mel.corp.example.com` |
-
-The SBC will automatically failover to the secondary server if the primary becomes unavailable.
+| Parameter | Value | CLI |
+|-----------|-------|-----|
+| Require Message-Authenticator in Requests | Enabled | `rad-pap-req-msg-auth-tx` |
+| Require Message-Authenticator in Responses | Enabled | `rad-req-msg-auth-rx` |
 
 #### Emergency Access: Break Glass Accounts
 
-Local break glass accounts provide emergency access when identity providers are unavailable. For break glass account configuration and procedures, see [Section 17: Break Glass Accounts](#17-break-glass-accounts).
+Local break glass accounts provide emergency access when the RADIUS AAA server is unavailable. For break glass account configuration and procedures, see [Section 17: Break Glass Accounts](#17-break-glass-accounts).
 
 **When to use break glass accounts:**
 
-- Active Directory Domain Controllers unreachable (all SBCs)
-- LDAP misconfiguration preventing authentication
-- Network connectivity issues (e.g., Direct Connect failure for Proxy SBC)
-- Domain Controller maintenance or outage
+- RADIUS AAA server(s) unreachable (all SBCs)
+- RADIUS misconfiguration preventing authentication
+- Network connectivity issues (e.g., Direct Connect failure for Proxy SBC, WAN failure for Downstream SBC)
+- Cisco ISE maintenance or outage
+
+> **Important:** The "Behavior upon Authentication Server Timeout" parameter must be set to **"Verify Access Locally"** to enable local break glass fallback. When the RADIUS server is unreachable (5-second timeout), the SBC will fall back to the Local Users table where the break glass account is stored.
 
 #### Network and Security Requirements
 
@@ -1093,15 +1116,18 @@ Ensure the following firewall rules are in place (see [Section 16: Firewall Rule
 
 | Source | Destination | Port | Protocol | Purpose |
 |--------|-------------|------|----------|---------|
-| All SBCs (Proxy + Downstream) | Domain Controllers | 636 | TCP/LDAPS | LDAP authentication |
+| All SBCs (Proxy + Downstream) | Cisco ISE PSNs | 1812 | UDP | RADIUS Authentication |
+| All SBCs (Proxy + Downstream) | Cisco ISE PSNs | 1813 | UDP | RADIUS Accounting |
 
-##### LDAPS Network Path Security
+##### RADIUS Network Path Security
 
 | Requirement | Details |
 |-------------|---------|
-| Encryption | TLS 1.2 minimum (LDAPS enforces encryption) |
+| Transport | RADIUS over UDP with shared secret (RADIUS does not use TLS natively; shared secret provides packet-level authentication via MD5 hash) |
+| Message-Authenticator | Enable Attribute 80 (Message-Authenticator) on both SBC and ISE to protect PAP credentials |
 | Network Segmentation | Management function shares the internal subnet (OAMP + LAN combined interface) |
-| Firewall | Permit only SBC management IP to DC LDAPS port |
+| Firewall | Permit only SBC management IPs to ISE RADIUS ports (1812/1813 UDP) |
+| Shared Secret Management | Use unique shared secrets per SBC or per site; store in the organisation's password vault |
 
 ---
 
@@ -1764,7 +1790,8 @@ This section details all firewall rules required for the AudioCodes SBC solution
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | SSH | Jump server → SBC | TCP | Jump server IP / Management Subnet | Any | SBC Management Interface IP | 22 | |
 | HTTPS | Jump server → SBC | TCP | Jump server IP / Management Subnet | Any | SBC Management Interface IP | 443 | |
-| LDAP(s) | SBC → LDAP | TCP | SBC Management Interface IP | Any | LDAP server | 636 | |
+| RADIUS Auth | SBC → RADIUS AAA | UDP | SBC Management Interface IP | Any | Cisco ISE PSN | 1812 | Management authentication |
+| RADIUS Acct | SBC → RADIUS AAA | UDP | SBC Management Interface IP | Any | Cisco ISE PSN | 1813 | Management accounting/audit |
 | Debug Recording | SBC → Jump server | UDP | SBC Management Interface IP | Any | Jump server IP / Management Subnet | 925 | |
 | Syslog | SBC → Jump server | UDP | SBC Management Interface IP | Any | Jump server IP / Management Subnet | 514 | |
 | CDR | SBC → CDR server | TCP | SBC Management Interface IP | Any | CDR server | 22 | |
@@ -1949,7 +1976,8 @@ This section details all firewall rules required for the AudioCodes SBC solution
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | SSH | Jump server → SBC | TCP | Jump server IP / Management Subnet | Any | SBC Management Interface IP | 22 | |
 | HTTPS | Jump server → SBC | TCP | Jump server IP / Management Subnet | Any | SBC Management Interface IP | 443 | |
-| LDAP(s) | SBC → LDAP | TCP | SBC Management Interface IP | Any | LDAP server | 636 | |
+| RADIUS Auth | SBC → RADIUS AAA | UDP | SBC Management Interface IP | Any | Cisco ISE PSN | 1812 | Management authentication |
+| RADIUS Acct | SBC → RADIUS AAA | UDP | SBC Management Interface IP | Any | Cisco ISE PSN | 1813 | Management accounting/audit |
 | Debug Recording | SBC → Jump server | UDP | SBC Management Interface IP | Any | Jump server IP / Management Subnet | 925 | |
 | Syslog | SBC → Jump server | UDP | SBC Management Interface IP | Any | Jump server IP / Management Subnet | 514 | |
 | CDR | SBC → CDR server | TCP | SBC Management Interface IP | Any | CDR server | 22 | |
@@ -2564,14 +2592,14 @@ The solution employs two distinct external publishing patterns and a unified aut
 |--------|------------|------------|---------------|
 | **External Publishing** | Bespoke: Dedicated EIP + AWS Security Group L4 (no cloud firewall on external side) | Traditional: Cloud firewall + reverse proxy | None (private subnet only) |
 | **Internal Traffic** | Cloud east-west firewall inspection on internal subnet | Cloud east-west firewall inspection on internal subnet | Private subnet, NAT Gateway egress |
-| **Authentication** | On-premises Active Directory (LDAPS) | Microsoft Entra ID (OAuth 2.0) | Local + SSH key-based |
-| **MFA** | Not supported (LDAPS limitation) | Supported via Entra Conditional Access | N/A |
+| **Authentication** | RADIUS via Cisco ISE (with on-premises AD as identity source) | Microsoft Entra ID (OAuth 2.0) | Local + SSH key-based |
+| **MFA** | Not natively supported (RADIUS limitation); ISE can proxy to MFA-capable identity sources | Supported via Entra Conditional Access | N/A |
 
 **Key Design Decisions:**
 
 - **SBC external interface is not firewalled:** The SBC's WAN ENI uses a dedicated Elastic IP with AWS Security Group (L4) rules only. SIP/TLS and SRTP/RTP protocols require direct IP connectivity — reverse proxies and Layer 7 firewalls are incompatible with real-time voice protocols. The SBC provides its own application-layer VoIP firewall for SIP message inspection and rate limiting. See Section 5 External Publishing Patterns for full details.
 - **OVOC uses traditional ingress:** OVOC is published via cloud firewall + reverse proxy for inbound Microsoft 365 webhook traffic and admin access. See Section 5 External Publishing Patterns.
-- **All SBCs use on-premises AD:** Both Proxy and Downstream SBCs authenticate against on-premises Active Directory (LDAPS) for consistency, WAN resilience, and operational simplicity. MFA is not available with this model — this is an accepted trade-off. See Section 10.4 for full details.
+- **All SBCs use RADIUS via Cisco ISE:** Both Proxy and Downstream SBCs authenticate against Cisco ISE (RADIUS) with on-premises Active Directory as the identity source. AudioCodes VSA (Vendor ID 5003, ACL-Auth-Level attribute 35) provides role-based access control. TACACS+ is not supported on AudioCodes SBC products. See Section 10.4 for full details.
 - **OVOC and ARM use Entra ID:** These components use Microsoft Entra ID (OAuth 2.0) with Conditional Access and MFA support. See Section 6 for app registrations.
 - **Cloud east-west firewall:** All internal/private-side traffic traverses a cloud east-west firewall for inspection. The SBC's external WAN interface does not traverse this firewall. See Section 5 Cloud East-West Firewall.
 - **OVOC Data Analytics API:** The ETL platform connects to OVOC PostgreSQL (TCP 5432) on the internal subnet for daily data extraction. Traffic traverses the cloud east-west firewall. The `analytics` user is read-only with no write capability. See [Section 22A: OVOC Data Analytics and Reporting](#22a-ovoc-data-analytics-and-reporting) for full details.
@@ -3310,6 +3338,7 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 | 2.0 | February 2026 | KS | Major network architecture revision: Consolidated Management (OAMP) and Internal (LAN) interfaces onto a single ENI and subnet, reducing Proxy SBC from 4-ENI to 3-ENI model and Downstream SBC from 3 to 2 Ethernet Groups; Reduced PSTN_Media_Realm from 1000 to 500 session legs (250 concurrent calls, UDP 40000-41999) to match contracted PSTN trunk capacity; Added dual External Publishing Patterns: SBC uses bespoke dedicated EIP + Security Group L4 (no firewall), OVOC uses traditional cloud firewall + reverse proxy ingress; Added Cloud East-West Firewall section for internal traffic inspection; Updated OVOC Security Group and prerequisites for reverse proxy ingress; Updated all interface tables, Ethernet Groups, IP Interfaces, Media Realms, SIP Interfaces across Sections 4, 5, 9, 11, 13 and Appendix D diagrams (D.1, D.3, D.4, D.6, D.8.1, D.8.2, D.8.3, D.8.7, D.8.8) |
 | 2.1 | February 2026 | KS | Unified SBC authentication to on-premises Active Directory (LDAPS) for all SBCs: Removed split identity model where Proxy SBC used Microsoft Entra ID (OAuth 2.0); All SBCs now use on-prem AD for consistency, WAN resilience, and operational simplicity; Documented MFA limitation as accepted trade-off; Removed AudioCodes-SBC-Management app registration; OVOC and ARM retain Entra ID authentication with MFA support; Broadened Section 21 from Stack Manager-only to comprehensive Cyber Security Considerations with security architecture summary, publishing patterns, and authentication model overview; Removed duplicate network security requirements from Section 21 (consolidated to Section 5.3) |
 | 2.2 | February 2026 | KS | Added Section 22A OVOC Data Analytics and Reporting: Documented OVOC Data Analytics API (direct PostgreSQL read-only access to analytics views), 24-hour data retention constraint, daily ETL pipeline to corporate data lake, Power BI integration, and comprehensive cyber security considerations (network access, credential management, access control, data classification, logging); Tightened SBC HA IAM policy per AudioCodes recommendation: Replaced 6-action Resource:* policy with least-privilege multi-statement policy using resource-scoped ARNs and tag-based conditions (ec2:AssociateAddress, ec2:DescribeAddresses, ec2:DescribeNetworkInterfaceAttribute, ec2:DescribeNetworkInterfaces, ec2:ReplaceRoute); Added temporal IAM elevation pattern for Stack Manager (detach broad permissions when not in active use); Updated OVOC Security Group (TCP 5432), Cloud East-West Firewall table, Section 16 OVOC Firewall Rules, Appendix C Port Summary, and Section 21 Security Architecture Summary for Analytics API; Added Data Analytics API license to OVOC Licensing section |
+| 2.3 | February 2026 | KS | Replaced SBC management authentication from LDAPS to RADIUS with Cisco ISE as recommended AAA server; Documented AudioCodes VSA dictionary (Vendor ID 5003, ACL-Auth-Level attribute 35) with role mapping (Security Administrator=200, Administrator=100, Monitor=50); Noted TACACS+ is not supported on AudioCodes SBC products (MSBR only); Added OVOC audit logging requirements to OVOC Security Group (syslog UDP 514 inbound, TCP 514 outbound, SNMP trap forwarding UDP 1164-1174); Documented OVOC dual-layer audit logging (OS-level auditd + application-level Actions Journal) with SIEM integration paths; Updated SBC firewall rules from LDAPS (TCP 636) to RADIUS (UDP 1812/1813); Updated Section 21 security architecture summary; Added Stack Manager supported OS list and SOE compatibility; Clarified bidirectional SIP connectivity for site SBCs, third-party PBX, and ATAs |
 
 ---
 
