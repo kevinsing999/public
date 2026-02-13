@@ -2,8 +2,8 @@
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 2.5
-**Date:** 12 February 2026
+**Document Version:** 2.6
+**Date:** 13 February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
 
@@ -364,7 +364,8 @@ The Stack Manager application supports the following Linux distributions:
 |-----------|----------|------|-------------------|---------|
 | Inbound | TCP | 22 | Admin CIDR | SSH Management |
 | Inbound | TCP | 443 | Admin CIDR | HTTPS Management |
-| Outbound | TCP | 443 | 0.0.0.0/0 | AWS API Access |
+| Outbound | TCP | 443 | VPC Endpoint SG | AWS API Access (EC2, CloudFormation, CloudWatch, IAM via PrivateLink) |
+| Outbound | TCP | 443 | S3 Prefix List | S3 Access (CloudFormation templates, firmware storage) |
 | Outbound | All | All | VPC CIDR | SBC Communication |
 
 #### SBC HA Security Group (eth0 — HA ENI)
@@ -372,7 +373,7 @@ The Stack Manager application supports the following Linux distributions:
 | Direction | Protocol | Port | Source/Destination | Purpose |
 |-----------|----------|------|-------------------|---------|
 | Inbound | All | All | HA Subnet CIDR | HA Communication (heartbeat & state sync) |
-| Outbound | TCP | 443 | 0.0.0.0/0 | AWS API Access (HA failover route table updates) |
+| Outbound | TCP | 443 | VPC Endpoint SG | AWS EC2 API (HA failover — route table updates, EIP reassignment via PrivateLink) |
 | Outbound | All | All | HA Subnet CIDR | HA Communication |
 
 #### SBC Internal Security Group (eth1 — Internal/LAN ENI)
@@ -387,7 +388,13 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | UDP | 6000-19999 | Internal Media Sources | RTP Media (internal, downstream) |
 | Inbound | UDP | 30000-39999 | Endpoint CIDRs | LMO Media |
 | Inbound | All | All | Other Region VPC CIDR | Cross-region SBC-to-SBC and management connectivity |
-| Outbound | All | All | 0.0.0.0/0 | All traffic |
+| Outbound | TCP/UDP | 5060-5061 | VPC CIDR | SIP Signalling (downstream SBCs, PBX, proxy-to-proxy) |
+| Outbound | UDP | 6000-39999 | VPC CIDR | RTP Media (internal, downstream, LMO) |
+| Outbound | TCP | 443 | OVOC CIDR | OVOC Device Management (REST API, keep-alive) |
+| Outbound | UDP | 162 | OVOC CIDR | SNMP Traps to OVOC |
+| Outbound | UDP | 514 | OVOC CIDR | Syslog to OVOC |
+| Outbound | TCP | 5001 | OVOC CIDR | QoE Reporting to OVOC |
+| Outbound | All | All | Other Region VPC CIDR | Cross-region SBC-to-SBC connectivity |
 
 #### SBC External Security Group (eth2 — External/WAN ENI)
 
@@ -398,7 +405,11 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | UDP/TCP | 5060, 5061 | SIP Provider CIDRs | SIP Provider Signalling (inbound) |
 | Inbound | UDP | 40000-41999 | SIP Provider CIDRs | PSTN Media (inbound from carrier) |
 | Inbound | All | All | Other Region VPC CIDR | Cross-region SBC connectivity |
-| Outbound | All | All | 0.0.0.0/0 | All traffic |
+| Outbound | TCP | 5061 | 52.112.0.0/14, 52.120.0.0/14 | Teams Direct Routing SIP Signalling (TLS) |
+| Outbound | UDP | 20000-21999 | 52.112.0.0/14, 52.120.0.0/14 | Teams Media (SRTP) |
+| Outbound | UDP/TCP | 5060-5061 | SIP Provider CIDRs | SIP Provider Signalling (outbound) |
+| Outbound | UDP | 40000-41999 | SIP Provider CIDRs | PSTN Media (outbound to carrier) |
+| Outbound | All | All | Other Region VPC CIDR | Cross-region SBC connectivity |
 
 #### ARM Security Group
 
@@ -408,7 +419,9 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | TCP | 80/443 | Enterprise CIDR | HTTP/HTTPS |
 | Inbound | All | All | VPC CIDR | Internal communication |
 | Inbound | All | All | Other Region VPC CIDR | Cross-region SBC and ARM Router connectivity |
-| Outbound | All | All | 0.0.0.0/0 | All traffic |
+| Outbound | TCP | 443 | 20.20.32.0/19, 20.190.128.0/18, 20.231.128.0/19, 40.126.0.0/18 | Microsoft Graph API and Entra ID Authentication (M365 Endpoint ID 56) |
+| Outbound | All | All | VPC CIDR | Internal communication (SBC management, OVOC) |
+| Outbound | All | All | Other Region VPC CIDR | Cross-region ARM Router connectivity |
 
 #### OVOC Security Group
 
@@ -422,11 +435,20 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | UDP | 514 | SBC CIDR | Device Syslog Ingestion (audit logging) |
 | Inbound | TCP | 5001 | SBC CIDR | QoE Reporting |
 | Inbound | TCP | 5432 | ETL Platform CIDR | Analytics API (PostgreSQL) |
-| Outbound | TCP | 443 | 0.0.0.0/0 | Microsoft Graph API |
+| Outbound | TCP | 443 | 20.20.32.0/19, 20.190.128.0/18, 20.231.128.0/19, 40.126.0.0/18 | Microsoft Graph API and Entra ID Authentication (M365 Endpoint ID 56) |
 | Outbound | TCP | 514 | Syslog/SIEM CIDR | Audit Log Forwarding (syslog to SIEM) |
 | Outbound | UDP | 1164-1174 | NMS/SIEM CIDR | SNMP Trap Forwarding (audit events to NMS) |
 | Inbound | All | All | Other Region VPC CIDR | Cross-region SBC connectivity |
 | Outbound | All | All | VPC CIDR | Internal traffic |
+
+> **Security Group Design Notes:**
+>
+> - **No 0.0.0.0/0 outbound rules.** All egress is restricted to specific destinations following the principle of least privilege.
+> - **AWS API access** (Stack Manager, SBC HA failover) uses **VPC Endpoints (PrivateLink)** for EC2, CloudFormation, CloudWatch, and IAM. This keeps API traffic within the AWS network and eliminates internet egress requirements. See [Section 20](#20-iam-permissions-and-security) for VPC Endpoint setup.
+> - **S3 access** uses a **VPC Gateway Endpoint** with prefix list reference in security group rules (no hourly cost).
+> - **Microsoft Graph API and Entra ID authentication** (OVOC, ARM) uses published Microsoft 365 Endpoint ID 56 CIDRs: `20.20.32.0/19`, `20.190.128.0/18`, `20.231.128.0/19`, `40.126.0.0/18`. These ranges are published via the [Microsoft 365 IP Address and URL web service](https://learn.microsoft.com/en-us/microsoft-365/enterprise/microsoft-365-ip-web-service) and should be reviewed monthly for changes. Consider automating updates via Lambda polling the M365 endpoints version API.
+> - **Teams Direct Routing** CIDRs (`52.112.0.0/14`, `52.120.0.0/14`) are stable and documented in the [Direct Routing planning guide](https://learn.microsoft.com/en-us/microsoftteams/direct-routing-plan).
+> - **SIP Provider CIDRs** must be obtained from each carrier and maintained as provider-specific managed prefix lists or documented CIDRs.
 
 > **Audit Logging:** OVOC provides two layers of audit logging: OS-level audit logging via Linux **auditd** (STIG-compliant, logs to `/var/log/audit/`) and application-level logging via the **Actions Journal** (tracks configuration changes, user actions, and device operations). Audit logs can be forwarded to an external SIEM (e.g., Splunk, Azure Sentinel) via syslog (TCP 514), SNMP traps (UDP 1164-1174), or the REST API (HTTPS 443). The OVOC Northbound Interface supports Syslog, SNMP (v2/v3), Email, and REST as alarm and journal forwarding destinations. Device syslog ingestion (UDP 514 inbound) allows OVOC to collect syslog messages directly from managed SBCs without requiring a separate syslog server. It is **recommended** to enable auditd and configure syslog forwarding to the organisation's SIEM for centralised audit trail and compliance reporting.
 
@@ -2714,11 +2736,51 @@ For enhanced security posture, consider adding a tag condition to restrict the s
 
 ### Network Placement
 
-- **Recommended:** Place in internal subnet with NAT Gateway egress
+- **Recommended:** Place in internal subnet with VPC Endpoints for AWS API access (no NAT Gateway required)
 - **Not Recommended:** Direct internet exposure via public IP
-- **Alternative:** Use VPC Endpoints (PrivateLink) for AWS API access to eliminate internet egress requirement
+- **Alternative:** NAT Gateway egress if VPC Endpoints are not deployed
 
 > **Note:** For Stack Manager Security Group rules, see Section 5.3 Security Groups.
+
+### VPC Endpoints (PrivateLink) — Required for AWS API Access
+
+The following VPC Endpoints eliminate the need for 0.0.0.0/0 outbound rules and keep AWS API traffic within the AWS network. Deploy in each region where SBC infrastructure exists.
+
+#### Required VPC Endpoints
+
+| Service | Endpoint Type | Service Name | Used By | Notes |
+|---------|--------------|--------------|---------|-------|
+| EC2 | Interface | `com.amazonaws.<region>.ec2` | SBC HA failover, Stack Manager | **Critical for HA** — must be in HA subnet |
+| S3 | Gateway | `com.amazonaws.<region>.s3` | Stack Manager (CloudFormation templates), SBC (firmware, backups) | Free — no hourly or data processing charges |
+| CloudFormation | Interface | `com.amazonaws.<region>.cloudformation` | Stack Manager | Required for stack create/update/delete |
+| CloudWatch | Interface | `com.amazonaws.<region>.monitoring` | Stack Manager (alarm management) | For `PutMetricAlarm`, `DeleteAlarms` |
+| STS | Interface | `com.amazonaws.<region>.sts` | SBC (IAM role assumption for HA), Stack Manager | Recommended — use regional endpoint |
+
+#### Optional VPC Endpoints
+
+| Service | Endpoint Type | Service Name | Used By | Notes |
+|---------|--------------|--------------|---------|-------|
+| SSM | Interface | `com.amazonaws.<region>.ssm` | EC2 management | If using Systems Manager for instance management |
+| SSM Messages | Interface | `com.amazonaws.<region>.ssmmessages` | Session Manager | If using Session Manager for SSH-less access |
+| CloudWatch Logs | Interface | `com.amazonaws.<region>.logs` | Centralised logging | If streaming logs to CloudWatch Logs |
+| ELB | Interface | `com.amazonaws.<region>.elasticloadbalancing` | Stack Manager (multi-zone NLB) | Only if using NLB for multi-zone HA |
+
+#### VPC Endpoint Security Group
+
+Create a dedicated security group for all Interface VPC Endpoints:
+
+| Direction | Protocol | Port | Source/Destination | Purpose |
+|-----------|----------|------|-------------------|---------|
+| Inbound | TCP | 443 | SBC HA Subnet CIDR | SBC HA failover API calls |
+| Inbound | TCP | 443 | Stack Manager SG | Stack Manager API calls |
+| Inbound | TCP | 443 | VPC CIDR | All VPC instances needing AWS API access |
+
+#### Configuration Notes
+
+1. **Enable Private DNS** on all Interface Endpoints (default). This ensures SDK/CLI calls automatically resolve service hostnames to private endpoint IPs — no application changes required.
+2. **Place EC2 endpoint ENI in the HA subnet** to ensure failover API calls do not traverse NAT Gateway.
+3. **S3 Gateway Endpoint** is free and adds a prefix list (`pl-xxxxxxxx`) to route tables. Reference this prefix list ID in security group outbound rules.
+4. **Cost estimate:** Interface endpoints cost ~$0.01/hour/AZ (~$7.30/month/AZ). With 5 required endpoints across 2 AZs: ~$73/month per region.
 
 ### Security Considerations
 
@@ -3489,6 +3551,7 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 | 2.2 | 11 February 2026 | KS | Added Section 22A OVOC Data Analytics and Reporting: Documented OVOC Data Analytics API (direct PostgreSQL read-only access to analytics views), 24-hour data retention constraint, daily ETL pipeline to corporate data lake, Power BI integration, and comprehensive cyber security considerations (network access, credential management, access control, data classification, logging); Tightened SBC HA IAM policy per AudioCodes recommendation: Replaced 6-action Resource:* policy with least-privilege multi-statement policy using resource-scoped ARNs and tag-based conditions (ec2:AssociateAddress, ec2:DescribeAddresses, ec2:DescribeNetworkInterfaceAttribute, ec2:DescribeNetworkInterfaces, ec2:ReplaceRoute); Added temporal IAM elevation pattern for Stack Manager (detach broad permissions when not in active use); Updated OVOC Security Group (TCP 5432), Cloud East-West Firewall table, Section 16 OVOC Firewall Rules, Appendix C Port Summary, and Section 21 Security Architecture Summary for Analytics API; Added Data Analytics API license to OVOC Licensing section |
 | 2.3 | 12 February 2026 | KS | Replaced SBC management authentication from LDAPS to RADIUS with Cisco ISE as recommended AAA server; Documented AudioCodes VSA dictionary (Vendor ID 5003, ACL-Auth-Level attribute 35) with role mapping (Security Administrator=200, Administrator=100, Monitor=50); Noted TACACS+ is not supported on AudioCodes SBC products (MSBR only); Added OVOC audit logging requirements to OVOC Security Group (syslog UDP 514 inbound, TCP 514 outbound, SNMP trap forwarding UDP 1164-1174); Documented OVOC dual-layer audit logging (OS-level auditd + application-level Actions Journal) with SIEM integration paths; Updated SBC firewall rules from LDAPS (TCP 636) to RADIUS (UDP 1812/1813); Updated Section 21 security architecture summary; Added Stack Manager supported OS list and SOE compatibility; Clarified bidirectional SIP connectivity for site SBCs, third-party PBX, and ATAs |
 | 2.4 | 12 February 2026 | KS | Added CDR access auditing guidance to Section 22A: Documented that OVOC does not natively log individual SQL queries via the Analytics API; Added 4-layer auditing approach for Analytics API (PostgreSQL native logging, pgAudit extension, network-level logging, data lake audit); Documented shared analytics account limitation and mitigations (IP attribution, application_name tagging, ETL-only restriction, database proxy); Added compliance summary table mapping audit questions to solutions; Documented OVOC GUI CDR viewing audit limitation — no native capability to log which operator viewed specific CDR records through the web GUI without considerable OS-level modification; Added 7 mitigations for GUI audit gap (RBAC, GDPR phone number masking, web server access log enhancement, Linux auditd, network-level monitoring, reverse proxy with enhanced logging, data lake as controlled access point); Included risk acceptance template for compliance documentation |
+| 2.6 | 13 February 2026 | KS | Replaced all 0.0.0.0/0 security group outbound rules with specific destinations following least-privilege egress: Stack Manager and SBC HA now use VPC Endpoints (PrivateLink) for AWS API access (EC2, CloudFormation, CloudWatch, STS); SBC Internal egress scoped to VPC CIDR for SIP/RTP/OVOC traffic; SBC External egress scoped to Teams Direct Routing CIDRs (52.112.0.0/14, 52.120.0.0/14) and SIP Provider CIDRs; ARM and OVOC egress scoped to Microsoft Graph/Entra ID CIDRs (M365 Endpoint ID 56: 20.20.32.0/19, 20.190.128.0/18, 20.231.128.0/19, 40.126.0.0/18); Added VPC Endpoints (PrivateLink) subsection to Section 20 with required/optional endpoint tables, VPC Endpoint Security Group, and configuration notes; Added Security Group Design Notes explaining egress architecture; Added S3 Gateway Endpoint with prefix list for CloudFormation template and firmware storage |
 | 2.5 | 12 February 2026 | KS | Network interface remapping and security architecture update addressing 10 items of stakeholder feedback: (1) Remapped SBC network interfaces — eth0=HA, eth1=OAMP+LAN, eth2=WAN (previously eth0=OAMP+LAN, eth1=WAN, eth2=HA); updated all interface tables, Key Concepts, and D.8.8 Matrix; (2) Clarified HA scope — Transit Gateway exclusion applies to HA failover VIP routing only; Virtual IPs must be routable cross-region for SBC-to-SBC connectivity via organisation’s existing network backbone; (3) Added cross-region VPC CIDR inbound rules to SBC, ARM, and OVOC Security Groups for US-AU management and SBC connectivity; (4) Split single SBC Security Group into three per-interface groups (HA, Internal, External) assigned to respective ENIs; added SNMP 161 and HTTPS 443 inbound from OVOC to Internal SG; narrowed Teams media to 20000-21999, PSTN media 40000-41999 on External interface; (5) Added Local Media Optimisation (LMO) scope clarification — applies to local users only, requires EUC/voice subnet mapping in Teams admin centre; (6) Removed App Registration 3 (ARM REST API Authentication) and all references (summary table, checklist, credentials template); renumbered App Registration 4 to 3; (7) Updated Section 16 firewall rules — Teams media 20000-21999; added bidirectional SIP signalling and media rules for SIP Provider AU (Telstra REGISTER-type) and US; added inbound SIP listening ports for carriers; renamed Downstream SBC to Downstream Devices (SBC, Media Pack, Cisco); added TCP 5061 (TLS) for inter-device SIP trunks; (8) Updated failover behaviour — ongoing calls should not drop during HA switchover; call sessions synchronised between Active/Standby; no Re-INVITE in VIP-based HA model; (9) Updated SIP trunk flow direction — clarified media and SIP signalling are bidirectional from firewall perspective for all SIP Providers; restricting to outbound-only may cause early media issues; (10) Clarified authentication model — SBCs use RADIUS (Cisco ISE) for direct access, OVOC/ARM use Azure Entra ID; OVOC provides SSO for centralised SBC management via Entra ID; moved SIP Provider connectivity from Internal to External interface; updated PSTN_Media_Realm binding, Proxy Set SIP Interfaces, Cloud East-West Firewall scope; updated Appendix C/D port summaries; updated Mermaid diagrams (d8-7 complete solution and simplified); fixed pre-existing inconsistencies (LDAPS→RADIUS in diagrams, US Stack Manager removal from simplified diagram); Cascaded interface remapping through Section 11 SBC configuration tables (Virtual Ports, Ethernet Groups, Ethernet Device Config — Group 1=HA, Group 2=OAMP+Internal, Group 3=External) and Section 19 HA/failover SIP Provider interface references (Internal→External) |
 
 ---
