@@ -9,11 +9,11 @@
 
 ## What This Is
 
-A single-file technical deployment guide: `AudioCodes-AWS-Deployment-Guide.md` (~3,500 lines). It documents the design, deployment, and configuration of AudioCodes SBC infrastructure on AWS with Microsoft Teams Direct Routing integration. The audience is cloud operations and voice engineering teams.
+A single-file technical deployment guide: `AudioCodes-AWS-Deployment-Guide.md` (~3,560 lines). It documents the design, deployment, and configuration of AudioCodes SBC infrastructure on AWS with Microsoft Teams Direct Routing integration. The audience is cloud operations and voice engineering teams.
 
 ## Document Version
 
-Currently at **v2.5** (12 February 2026). The full changelog is at the bottom of the document under "Document Control" (around line 3472).
+Currently at **v2.6** (13 February 2026). The full changelog is at the bottom of the document under "Document Control" (around line 3535).
 
 ## Key Structure
 
@@ -100,6 +100,29 @@ Implemented across two sub-sessions (initial implementation + QA-driven remediat
    - Ran 4 QA agents (version/removals, interface remapping, security/firewall, content changes)
    - Identified and fixed cascading failures: Section 11 SBC config tables and Section 19 SIP Provider references not updated in initial pass
    - All verification checks pass (no stale eth0/OAMP, no GE_3/HA, no SIP Provider/Internal, no Claude references)
+
+**v2.6 — Security group egress hardening and VPC Endpoints**
+
+10. **Replaced all 0.0.0.0/0 security group outbound rules with specific destinations**
+    - **Stack Manager SG:** TCP 443 → VPC Endpoint SG (EC2, CloudFormation, CloudWatch, IAM via PrivateLink) + S3 Prefix List
+    - **SBC HA SG (eth0):** TCP 443 → VPC Endpoint SG (EC2 API for HA failover route table updates, EIP reassignment)
+    - **SBC Internal SG (eth1):** All/All → 7 specific rules: SIP signalling (TCP/UDP 5060-5061 → VPC CIDR), RTP media (UDP 6000-39999 → VPC CIDR), OVOC management/SNMP/syslog/QoE (→ OVOC CIDR), cross-region (→ Other Region VPC CIDR)
+    - **SBC External SG (eth2):** All/All → 5 specific rules: Teams SIP (TCP 5061 → 52.112.0.0/14, 52.120.0.0/14), Teams SRTP (UDP 20000-21999 → same), SIP Provider signalling/media (→ SIP Provider CIDRs), cross-region
+    - **ARM SG:** All/All → Microsoft Graph/Entra ID CIDRs (M365 Endpoint ID 56: 20.20.32.0/19, 20.190.128.0/18, 20.231.128.0/19, 40.126.0.0/18) + VPC CIDR + cross-region
+    - **OVOC SG:** TCP 443 → same M365 Endpoint ID 56 CIDRs
+
+11. **Added Security Group Design Notes** (after SG tables in Section 5.3)
+    - Explains least-privilege egress approach, VPC Endpoints for AWS API, S3 Gateway Endpoint, M365 CIDR maintenance, Teams DR CIDR stability, SIP Provider CIDR management
+
+12. **Added VPC Endpoints (PrivateLink) subsection to Section 20**
+    - Required endpoints: EC2 (critical for HA), S3 Gateway (free), CloudFormation, CloudWatch, STS
+    - Optional endpoints: SSM, SSM Messages, CloudWatch Logs, ELB
+    - VPC Endpoint Security Group table
+    - Configuration notes: Private DNS, EC2 endpoint in HA subnet, S3 prefix list, cost estimate (~$73/month/region)
+
+13. **Diagram alignment verified**
+    - All 5 .mmd source diagrams checked — no 0.0.0.0/0 or security group rules depicted; diagrams show connectivity architecture, not SG rules
+    - SVG text search found 3 PNG-only diagrams with related content (04 Subnet Design, 06 Deployment Sequence, 24 Stack Manager) — no conflicts, potential future enhancement only
 
 ## Important Conventions
 
