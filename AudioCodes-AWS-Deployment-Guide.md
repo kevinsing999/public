@@ -3353,18 +3353,18 @@ This appendix provides visual representations of all network flows in the AudioC
 
 | Flow Type | Source | Destination | Protocol | Ports | Encryption |
 |-----------|--------|-------------|----------|-------|------------|
-| **Signalling** |
+| **Signalling** | | | | | |
 | Teams → Proxy SBC | Microsoft 365 | Proxy SBC (WAN) | TCP | 5061 | TLS |
 | Proxy SBC → Teams | Proxy SBC (WAN) | Microsoft 365 | TCP | 5061 | TLS |
 | Internal SIP | Any Internal | Proxy SBC (LAN) | TCP/UDP | 5060, 5061 | None/TLS |
 | Endpoint SIP | Endpoints | Downstream SBC | UDP | 5060-5069 | None |
-| **Media** |
+| **Media** | | | | | |
 | Teams Media | Microsoft 365 | Proxy SBC (WAN) | UDP | 20000-21999 | SRTP |
 | LMO Media | Teams Endpoints | SBC | UDP | 30000-39999 | RTP |
 | Internal Media | Downstream SBC | Proxy SBC | UDP | 10000-19999 | RTP |
 | PSTN Media | SBC / PSTN Provider | PSTN Provider / SBC | UDP | 40000-41999 | RTP |
 | 3rd Party PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
-| **Management** |
+| **Management** | | | | | |
 | SNMP Traps | SBC | OVOC | UDP | 162 | None |
 | QoE Reports | SBC | OVOC | TCP | 5001 | TLS |
 | Device Mgmt | OVOC/ARM | SBC | TCP | 443 | HTTPS |
