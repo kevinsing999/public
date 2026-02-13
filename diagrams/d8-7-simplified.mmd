@@ -30,7 +30,6 @@ flowchart TB
             USActive["Active"]
             USStandby["Standby"]
         end
-        USStack["Stack Manager"]
         ARMUS["ARM Router"]
     end
 
@@ -63,7 +62,6 @@ flowchart TB
     StackMgr --> AUActive
     OVOC --> AUActive
     ARM --> AUActive
-    USStack --> USActive
     ARMUS --> USActive
 
     %% AWS to On-Prem
@@ -72,8 +70,8 @@ flowchart TB
     AUActive <-->|"UDP 5060"| PBX
 
     %% On-Prem Internal
-    DSSBC <-->|"LDAPS"| AD
-    DSLBO <-->|"LDAPS"| AD
+    DSSBC <-->|"RADIUS"| AD
+    DSLBO <-->|"RADIUS"| AD
     DSSBC --> Phones
     DSSBC --> Soft
     DSLBO --> Phones
@@ -88,6 +86,6 @@ flowchart TB
 
     class Teams,M365,SIPAU,SIPUS cloud
     class AUActive,AUStandby,USActive,USStandby sbc
-    class StackMgr,OVOC,ARM,USStack,ARMUS mgmt
+    class StackMgr,OVOC,ARM,ARMUS mgmt
     class DSSBC,DSLBO,PBX,AD onprem
     class Phones,Soft endpoint

@@ -2,7 +2,7 @@
 
 ## Cloud Operations & Voice Engineering Reference Document
 
-**Document Version:** 2.4
+**Document Version:** 2.5
 **Date:** 12 February 2026
 **Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
@@ -106,6 +106,8 @@ When deploying AudioCodes Mediant VE SBCs in High Availability across two Availa
 
 The Virtual IP addresses are used for failover routing **within the same VPC**, where the route table is updated to point traffic to the newly active SBC's ENI.
 
+> **Cross-Region SBC-to-SBC Connectivity:** While HA failover VIP routing is scoped to a single VPC, the Virtual IPs assigned to each regional SBC pair **do** need to be routable between the AU and US regions for SBC-to-SBC (proxy-to-proxy) signalling and media. This cross-region reachability is provided by the organisation's existing network backbone (AWS Direct Connect / VPN) and does not require AWS Transit Gateway. The Transit Gateway exclusion above refers specifically to HA failover VIP routing between VPCs, not to general cross-region SBC-to-SBC reachability.
+
 ### API Access Requirements
 
 #### Stack Manager API Access
@@ -182,11 +184,11 @@ The SBCs require **internet access from the HA subnet** to communicate with AWS 
 
 | Interface | Purpose | Subnet Type |
 |-----------|---------|-------------|
-| eth0 | Management + LAN/Internal (OVOC, ARM, SSH, HTTPS, Downstream/Site SBCs, Third-Party PBX, ATAs, SIP Providers) | Internal Subnet |
-| eth1 | WAN/External (Microsoft Teams Direct Routing, Public SIP) | DMZ/External Subnet |
-| eth2 | HA Communication + AWS API Access | HA Subnet (dedicated) |
+| eth0 | HA Communication + AWS API Access | HA Subnet (dedicated) |
+| eth1 | Management + LAN/Internal (OVOC, ARM, SSH, HTTPS, Downstream/Site SBCs, Third-Party PBX, ATAs) | Internal Subnet |
+| eth2 | WAN/External (Microsoft Teams Direct Routing, SIP Providers, Public SIP) | DMZ/External Subnet |
 
-> **SIP Connectivity Direction:** All SIP connectivity on eth0 to site SBCs, existing third-party PBX systems (e.g., Cisco CUCM, Avaya Aura, Mitel), and ATAs (Analog Telephone Adapters) is **bidirectional — both inbound and outbound**. The SBC operates as a Back-to-Back User Agent (B2BUA) with paired IP-to-IP Routing Rules configured for each direction. Inbound calls (from these entities toward the Proxy SBC) are classified via Classification Rules and Proxy Set matching; outbound calls (from the Proxy SBC toward these entities) are routed via the destination IP Group's Proxy Set. SIP signalling and RTP media flow in both directions for all connected entity types.
+> **SIP Connectivity Direction:** All SIP connectivity on eth1 to site SBCs, existing third-party PBX systems (e.g., Cisco CUCM, Avaya Aura, Mitel), and ATAs (Analog Telephone Adapters) is **bidirectional — both inbound and outbound**. The SBC operates as a Back-to-Back User Agent (B2BUA) with paired IP-to-IP Routing Rules configured for each direction. Inbound calls (from these entities toward the Proxy SBC) are classified via Classification Rules and Proxy Set matching; outbound calls (from the Proxy SBC toward these entities) are routed via the destination IP Group's Proxy Set. SIP signalling and RTP media flow in both directions for all connected entity types.
 
 #### SBC IAM Role Requirements
 
@@ -365,15 +367,37 @@ The Stack Manager application supports the following Linux distributions:
 | Outbound | TCP | 443 | 0.0.0.0/0 | AWS API Access |
 | Outbound | All | All | VPC CIDR | SBC Communication |
 
-#### SBC Security Group
+#### SBC HA Security Group (eth0 — HA ENI)
 
 | Direction | Protocol | Port | Source/Destination | Purpose |
 |-----------|----------|------|-------------------|---------|
-| Inbound | TCP | 22 | Admin CIDR | SSH |
+| Inbound | All | All | HA Subnet CIDR | HA Communication (heartbeat & state sync) |
+| Outbound | TCP | 443 | 0.0.0.0/0 | AWS API Access (HA failover route table updates) |
+| Outbound | All | All | HA Subnet CIDR | HA Communication |
+
+#### SBC Internal Security Group (eth1 — Internal/LAN ENI)
+
+| Direction | Protocol | Port | Source/Destination | Purpose |
+|-----------|----------|------|-------------------|---------|
+| Inbound | TCP | 22 | Admin CIDR | SSH Management |
 | Inbound | TCP | 80/443 | Admin CIDR | Web Management |
-| Inbound | TCP/UDP | 5060/5061 | SIP Endpoints | SIP Signalling |
-| Inbound | UDP | 6000-41999 | Media Sources | RTP Media |
-| Inbound | All | All | HA Subnet CIDR | HA Communication |
+| Inbound | TCP | 443 | OVOC CIDR | OVOC Device Management |
+| Inbound | UDP | 161 | OVOC CIDR | SNMP Polling (OVOC) |
+| Inbound | TCP/UDP | 5060/5061 | SIP Endpoints | SIP Signalling (internal) |
+| Inbound | UDP | 6000-19999 | Internal Media Sources | RTP Media (internal, downstream) |
+| Inbound | UDP | 30000-39999 | Endpoint CIDRs | LMO Media |
+| Inbound | All | All | Other Region VPC CIDR | Cross-region SBC-to-SBC and management connectivity |
+| Outbound | All | All | 0.0.0.0/0 | All traffic |
+
+#### SBC External Security Group (eth2 — External/WAN ENI)
+
+| Direction | Protocol | Port | Source/Destination | Purpose |
+|-----------|----------|------|-------------------|---------|
+| Inbound | TCP | 5061 | 52.112.0.0/14, 52.122.0.0/15 | Teams SIP Signalling (TLS) |
+| Inbound | UDP | 20000-21999 | 52.112.0.0/14, 52.120.0.0/14 | Teams Media (SRTP) |
+| Inbound | UDP/TCP | 5060, 5061 | SIP Provider CIDRs | SIP Provider Signalling (inbound) |
+| Inbound | UDP | 40000-41999 | SIP Provider CIDRs | PSTN Media (inbound from carrier) |
+| Inbound | All | All | Other Region VPC CIDR | Cross-region SBC connectivity |
 | Outbound | All | All | 0.0.0.0/0 | All traffic |
 
 #### ARM Security Group
@@ -383,6 +407,7 @@ The Stack Manager application supports the following Linux distributions:
 | Inbound | TCP | 22 | Admin CIDR | SSH |
 | Inbound | TCP | 80/443 | Enterprise CIDR | HTTP/HTTPS |
 | Inbound | All | All | VPC CIDR | Internal communication |
+| Inbound | All | All | Other Region VPC CIDR | Cross-region SBC and ARM Router connectivity |
 | Outbound | All | All | 0.0.0.0/0 | All traffic |
 
 #### OVOC Security Group
@@ -400,6 +425,7 @@ The Stack Manager application supports the following Linux distributions:
 | Outbound | TCP | 443 | 0.0.0.0/0 | Microsoft Graph API |
 | Outbound | TCP | 514 | Syslog/SIEM CIDR | Audit Log Forwarding (syslog to SIEM) |
 | Outbound | UDP | 1164-1174 | NMS/SIEM CIDR | SNMP Trap Forwarding (audit events to NMS) |
+| Inbound | All | All | Other Region VPC CIDR | Cross-region SBC connectivity |
 | Outbound | All | All | VPC CIDR | Internal traffic |
 
 > **Audit Logging:** OVOC provides two layers of audit logging: OS-level audit logging via Linux **auditd** (STIG-compliant, logs to `/var/log/audit/`) and application-level logging via the **Actions Journal** (tracks configuration changes, user actions, and device operations). Audit logs can be forwarded to an external SIEM (e.g., Splunk, Azure Sentinel) via syslog (TCP 514), SNMP traps (UDP 1164-1174), or the REST API (HTTPS 443). The OVOC Northbound Interface supports Syslog, SNMP (v2/v3), Email, and REST as alarm and journal forwarding destinations. Device syslog ingestion (UDP 514 inbound) allows OVOC to collect syslog messages directly from managed SBCs without requiring a separate syslog server. It is **recommended** to enable auditd and configure syslog forwarding to the organisation's SIEM for centralised audit trail and compliance reporting.
@@ -414,7 +440,7 @@ The Proxy SBC uses a bespoke external publishing pattern for public-facing conne
 
 **Architecture:**
 
-- **Dedicated Elastic IP (EIP):** Each Proxy SBC HA pair is assigned a dedicated Elastic IP address on the External (WAN) ENI. The EIP provides the public-facing IP address for SIP signalling (TLS 5061) and SRTP media (UDP 20000-29999). During HA failover, the EIP is automatically reassigned to the newly Active instance.
+- **Dedicated Elastic IP (EIP):** Each Proxy SBC HA pair is assigned a dedicated Elastic IP address on the External (WAN) ENI. The EIP provides the public-facing IP address for SIP signalling (TLS 5061) and SRTP media (UDP 20000-21999). During HA failover, the EIP is automatically reassigned to the newly Active instance.
 - **AWS Security Group (Layer 4):** Traffic filtering is enforced at the AWS Security Group level using Layer 4 rules (protocol, port, source/destination CIDR). Security Groups act as a stateful firewall controlling inbound and outbound traffic to the External ENI. SIP and media traffic from Microsoft Teams and PSTN providers is permitted based on published IP ranges and port allocations.
 - **No Reverse Proxy or Firewall on External Side:** The SBC's WAN ENI is **not** behind a cloud firewall or reverse proxy. SIP/TLS and SRTP/RTP protocols require direct IP connectivity between the SBC and external parties for proper NAT traversal, session persistence, and real-time media delivery. The SBC handles its own TLS termination, SIP message inspection, and media anchoring natively.
 
@@ -458,10 +484,8 @@ Internal/private-side traffic between the SBC and on-premises infrastructure tra
 
 | Traffic Type | Source | Destination | Protocol/Ports | Inspection |
 |-------------|--------|-------------|----------------|------------|
-| SIP Signalling | Proxy SBC | Downstream SBCs | UDP 5060 | Inspected |
-| SIP Signalling | Proxy SBC | SIP Provider AU/US | UDP 5060 | Inspected |
+| SIP Signalling | Proxy SBC | Downstream SBCs | TCP/UDP 5060, 5061 | Inspected |
 | RTP Media | Proxy SBC | Downstream SBCs | UDP 6000-19999 | Inspected |
-| PSTN Media | Proxy SBC | SIP Provider AU/US | UDP 40000-41999 | Inspected |
 | Management | OVOC/ARM | Proxy SBC | TCP 443, UDP 162 | Inspected |
 | Management | Admin | Proxy SBC | TCP 22, TCP 443 | Inspected |
 | Analytics ETL | ETL Platform | OVOC | TCP 5432 | Inspected |
@@ -492,7 +516,6 @@ All AudioCodes components require integration with Microsoft Entra ID (formerly 
 |-----------------|---------|---------|
 | AudioCodes-OVOC-Teams-Integration | OVOC | Teams QoE data, user information |
 | AudioCodes-ARM-WebUI | ARM | Web UI authentication |
-| AudioCodes-ARM-REST-API | ARM | REST API authentication |
 | AudioCodes-SBC-DirectRouting | SBC | Teams Direct Routing SBA (if applicable) |
 
 ---
@@ -596,44 +619,7 @@ Navigate to **App roles** > **Create app role** for each role:
 
 ---
 
-### App Registration 3: ARM REST API Authentication
-
-**Purpose:** Enables service-to-service authentication for ARM REST API calls.
-
-#### Registration Steps
-
-1. Navigate to **Azure Portal** > **Microsoft Entra ID** > **App registrations** > **New registration**
-2. Configure:
-   - **Name:** `AudioCodes-ARM-REST-API`
-   - **Supported account types:** Accounts in this organizational directory only
-   - **Redirect URI:** Leave blank
-3. Click **Register**
-
-#### API Permissions Required
-
-| API | Permission | Type | Purpose |
-|-----|------------|------|---------|
-| AudioCodes-ARM-WebUI | `user_impersonation` | Delegated | Access ARM API |
-
-#### Client Credentials
-
-Create a client secret as described above for API authentication.
-
-#### Token Endpoint
-
-```
-POST https://login.microsoftonline.com/{TenantID}/oauth2/v2.0/token
-Content-Type: application/x-www-form-urlencoded
-
-grant_type=client_credentials
-&client_id={ARM-REST-API-ClientID}
-&client_secret={ARM-REST-API-Secret}
-&scope=api://{ARM-WebUI-ClientID}/.default
-```
-
----
-
-### App Registration 4: SBC Teams Direct Routing (If Using SBA)
+### App Registration 3: SBC Teams Direct Routing (If Using SBA)
 
 **Purpose:** Required if using Survivable Branch Appliance (SBA) functionality with Teams Direct Routing.
 
@@ -975,6 +961,8 @@ This section describes the authentication architecture for SBC management access
 
 > **Note on TACACS+:** AudioCodes Mediant SBC products (including Mediant VE, Mediant 800C, Mediant 4000, and Mediant 9000) do **not** support TACACS+ for management authentication. TACACS+ is only available on the AudioCodes Mediant MSBR (Multi-Service Business Router) product line. For SBC deployments, RADIUS is the supported centralised AAA protocol. RADIUS and LDAP cannot be used simultaneously for management login — one must be chosen.
 
+> **SBC Management via OVOC (SSO):** While SBCs authenticate direct management access (SSH, Web GUI) via RADIUS (Cisco ISE), users can also manage SBCs through the OVOC portal. OVOC authenticates users via Microsoft Entra ID (OAuth 2.0 with MFA via Conditional Access), and once authenticated, OVOC connects to the SBC on the user's behalf using its management connection (HTTPS 443). This provides the best of both worlds: SBCs use RADIUS for direct access, while OVOC provides single sign-on (SSO) via Entra ID for centralised SBC management through the OVOC portal.
+
 #### Authentication Architecture Overview
 
 ![Diagram 5](png-diagrams/05-authentication-architecture-overview.png)
@@ -1145,16 +1133,16 @@ The following interfaces are enabled on the Proxy SBC:
 
 | Interface | Status   | Purpose |
 |-----------|----------|---------|
-| GE_1      | Enabled  | Ethernet Group 1 (OAMP + Internal) |
-| GE_2      | Enabled  | Ethernet Group 2 (External) |
-| GE_3      | Enabled  | Ethernet Group 3 (HA) |
+| GE_1      | Enabled  | Ethernet Group 1 (HA) |
+| GE_2      | Enabled  | Ethernet Group 2 (OAMP + Internal) |
+| GE_3      | Enabled  | Ethernet Group 3 (External) |
 | GE_4      | Disabled | Unused |
-| GE_5      | Enabled  | Ethernet Group 1 (OAMP + Internal) - Redundant |
-| GE_6      | Enabled  | Ethernet Group 2 (External) - Redundant |
-| GE_7      | Enabled  | Ethernet Group 3 (HA) - Redundant |
+| GE_5      | Enabled  | Ethernet Group 1 (HA) - Redundant |
+| GE_6      | Enabled  | Ethernet Group 2 (OAMP + Internal) - Redundant |
+| GE_7      | Enabled  | Ethernet Group 3 (External) - Redundant |
 | GE_8      | Disabled | Unused |
 
-In AWS, AudioCodes physical ports (GE1-GE8) are virtualized and mapped to Elastic Network Interfaces (ENIs). Each ENI connects to a specific VPC subnet, acting like a virtual switch port, receiving its own private IP (with optional Elastic IP for public access). Since ports are grouped into Ethernet Groups for redundancy (GE1+GE5 for OAMP+Internal, GE2+GE6 for External, GE3+GE7 for HA), three ENIs are created - one per Ethernet Group - for logical separation and redundancy at cloud level. Management (OAMP) and Internal (LAN) functions share a single ENI and subnet, reducing the number of required network interfaces. Security Groups and routing tables control traffic flow.
+In AWS, AudioCodes physical ports (GE1-GE8) are virtualized and mapped to Elastic Network Interfaces (ENIs). Each ENI connects to a specific VPC subnet, acting like a virtual switch port, receiving its own private IP (with optional Elastic IP for public access). Since ports are grouped into Ethernet Groups for redundancy (GE1+GE5 for HA, GE2+GE6 for OAMP+Internal, GE3+GE7 for External), three ENIs are created - one per Ethernet Group - for logical separation and redundancy at cloud level. Management (OAMP) and Internal (LAN) functions share a single ENI and subnet, reducing the number of required network interfaces. Security Groups and routing tables control traffic flow.
 
 #### Downstream SBC Physical Ports
 
@@ -1183,9 +1171,9 @@ Ethernet Groups are used to define logical groupings of physical or virtual port
 
 | Ethernet Group | Member Ports | Purpose |
 |----------------|--------------|---------|
-| Group 1        | GE_1, GE_5   | OAMP + Internal (LAN) |
-| Group 2        | GE_2, GE_6   | External (WAN) |
-| Group 3        | GE_3, GE_7   | HA |
+| Group 1        | GE_1, GE_5   | HA |
+| Group 2        | GE_2, GE_6   | OAMP + Internal (LAN) |
+| Group 3        | GE_3, GE_7   | External (WAN) |
 
 #### Downstream SBC Ethernet Groups
 
@@ -1204,13 +1192,13 @@ The Ethernet Device table defines the logical network interfaces on the AudioCod
 
 #### Proxy SBC Ethernet Device Configuration
 
-The Proxy SBC requires three logical Ethernet interfaces: a combined OAMP + Internal (LAN) interface for management and internal signalling/media, an External (WAN/DMZ) interface for Microsoft Teams, and an HA interface for high-availability synchronisation.
+The Proxy SBC requires three logical Ethernet interfaces: an HA interface for high-availability synchronisation, a combined OAMP + Internal (LAN) interface for management and internal signalling/media, and an External (WAN/DMZ) interface for Microsoft Teams and SIP Providers.
 
 | Interface Name              | Underlying Interface | VLAN ID  |
 |-----------------------------|----------------------|----------|
-| OAMP + Internal (LAN)       | Group_1              | VLAN ID1 |
-| External (WAN)              | Group_2              | VLAN ID1 |
-| HA (High Availability)      | Group_3              | VLAN ID1 |
+| HA (High Availability)      | Group_1              | VLAN ID1 |
+| OAMP + Internal (LAN)       | Group_2              | VLAN ID1 |
+| External (WAN)              | Group_3              | VLAN ID1 |
 
 **Design Notes:**
 
@@ -1273,7 +1261,7 @@ The Proxy SBC requires three IP interfaces corresponding to the three Ethernet D
 The Downstream SBC requires two IP interfaces. No External (WAN) interface is configured as the Downstream SBC does not connect directly to Microsoft Teams or any external/DMZ network.
 
 | Index | Application Types      | Interface Mode | IP Address | Gateway  | DNS      | Interface Name        | Ethernet Device          |
-|-------|------------------------|----------------|------------|----------|----------|-----------------------|--------------------------|
+|-------|------------------------|----------------|------------|----------|-----------|-----------------------|--------------------------|
 | 0     | OAMP + Media + Control | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | OAMP + Internal (LAN) | OAMP + Internal (LAN)    |
 | 1     | Maintenance            | IPv4 Manual    | X.X.X.X    | X.X.X.X  | X.X.X.X  | HA                    | HA                       |
 
@@ -1422,15 +1410,19 @@ The Proxy SBC requires three Media Realms to handle media for internal trunk tra
 |-------|----------------------|------------------------|----------------|------------------------------|---------------------------|
 | 0     | Internal_Media_Realm | OAMP + Internal (LAN)  | XXXX           | 1000                         | XXXX + 1999               |
 | 1     | M365_Media_Realm     | External (WAN)         | XXXX           | 1000                         | XXXX + 1999               |
-| 2     | PSTN_Media_Realm     | OAMP + Internal (LAN)  | XXXX           | 500                          | XXXX + 999                |
+| 2     | PSTN_Media_Realm     | External (WAN)         | XXXX           | 500                          | XXXX + 999                |
 
 **Design Notes:**
 
 - **Internal_Media_Realm (Index 0):** Used for RTP media sessions between the Proxy SBC and internal entities such as Downstream SBCs, third-party PBX systems, and registered endpoints. Bound to the OAMP + Internal (LAN) interface.
 - **M365_Media_Realm (Index 1):** Dedicated to RTP/SRTP media sessions between the Proxy SBC and Microsoft Teams (via the External/WAN/DMZ interface). This realm is bound to the External (WAN) interface so that media traffic egresses through the DMZ. Firewall rules must permit the configured RTP port range on this interface.
-- **PSTN_Media_Realm (Index 2):** Used for RTP media sessions between the Proxy SBC and the PSTN SIP trunk provider. Bound to the OAMP + Internal (LAN) interface. A separate Media Realm is used (rather than sharing Internal_Media_Realm) to maintain distinct port ranges for troubleshooting and capacity management. Configured with 500 session legs (250 concurrent calls) to align with PSTN trunk capacity requirements.
+- **PSTN_Media_Realm (Index 2):** Used for RTP media sessions between the Proxy SBC and the PSTN SIP trunk provider. Bound to the External (WAN) interface, as SIP Provider connectivity uses the external/DMZ interface. A separate Media Realm is used (rather than sharing Internal_Media_Realm) to maintain distinct port ranges for troubleshooting and capacity management. Configured with 500 session legs (250 concurrent calls) to align with PSTN trunk capacity requirements.
 - **Media Session Legs:** Internal, M365, and LMO Media Realms are configured with 1000 media session legs (approximately 500 concurrent calls each). The PSTN Media Realm is configured with 500 session legs (250 concurrent calls) to match the contracted PSTN trunk capacity. Each call consumes two legs (one for each direction). Adjust these values based on expected call volumes and SBC licensing.
-- **RTP Port Range:** The RTP Start Port should be selected to avoid conflicts with other services. Each Media Realm requires a contiguous range of ports equal to twice the number of media session legs (e.g., 1000 legs = 2000 ports, 500 legs = 1000 ports). Ensure that the port ranges for all Media Realms on the same interface do not overlap.
+- **RTP Port Range:** The RTP Start Port should be selected to avoid conflicts with other services.
+
+> **Local Media Optimisation (LMO) — Scope and Requirements:** LMO applies to **local users only** — specifically, Teams endpoints (soft clients, IP phones, conference room devices) that reside on subnets directly reachable by the Proxy SBC. For LMO to function, all EUC (End User Computing) and voice subnets must be identified, documented, and configured as trusted network subnets in the Microsoft Teams admin centre. This enables Teams to identify when a user is on the corporate network and route media directly to the SBC (via the LMO Media Realm, UDP 30000-39999) rather than through the Microsoft Teams media relay infrastructure. The Proxy SBC itself is reachable from all locations — LMO eligibility is determined by the **endpoint’s** network location, not the SBC’s. Remote or external users will continue to use standard Teams media relay paths. **Action Required:** The voice/network engineering team must map out all EUC and voice subnets across all sites and configure these into the Teams admin centre Network Topology settings. Refer to Microsoft documentation for configuring Network Topology and Trusted IP settings.
+
+Each Media Realm requires a contiguous range of ports equal to twice the number of media session legs (e.g., 1000 legs = 2000 ports, 500 legs = 1000 ports). Ensure that the port ranges for all Media Realms on the same interface do not overlap.
 
 #### Downstream SBC Media Realm
 
@@ -1531,8 +1523,8 @@ The Proxy SBC maintains Proxy Sets for all trunk destinations in the architectur
 | 1     | Teams Direct Routing             | External (WAN)         | Teams                 | Using-OPTIONS       | Enable         | Random-Weights              |
 | 2     | Prod_Downstream SBC              | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
 | 3     | 3rd Party PBX & Radio Systems    | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 4     | SIP Provider AU                  | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
-| 5     | SIP Provider US                  | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 4     | SIP Provider AU                  | External (WAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
+| 5     | SIP Provider US                  | External (WAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
 | 6     | Proxy-to-Proxy                   | Internal (LAN)         | --                    | Using-OPTIONS       | Enable         | --                          |
 
 **Design Notes:**
@@ -1809,31 +1801,41 @@ This section details all firewall rules required for the AudioCodes SBC solution
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
 | Teams Direct Routing | Teams → SBC | TCP | 52.112.0.0/14, 52.122.0.0/15 | 1024-65535 | SBC Public IP Address | 5061 | SIP Signalling |
 | | SBC → Teams | TCP | SBC Public IP Address | 1024-65535 | 52.112.0.0/14, 52.122.0.0/15 | 5061 | SIP Signalling |
-| | Teams → SBC | UDP | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | SBC Public IP Address | 20000-29999 | Media |
-| | SBC → Teams | UDP | SBC Public IP Address | 20000-29999 | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | Media |
+| | Teams → SBC | UDP | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | SBC Public IP Address | 20000-21999 | Media |
+| | SBC → Teams | UDP | SBC Public IP Address | 20000-21999 | 52.112.0.0/14, 52.120.0.0/14 | 3478-3481, 49152-53247 | Media |
 
 #### Integration with SIP Provider AU (Australian Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with SIP Provider AU | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC Internal IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider AU | UDP | AU Proxy SBC Internal IP Address | 40000-41999 | SIP Provider AU IP/s | Any | Media |
+| Integration with SIP Provider AU | SBC → SIP Provider AU | UDP/TCP | AU Proxy SBC External IP Address | Any | SIP Provider AU IP/s | 5060, 5061 | SIP Signalling (outbound) |
+| | SIP Provider AU → SBC | UDP/TCP | SIP Provider AU IP/s | Any | AU Proxy SBC External IP Address | 5060, 5061 | SIP Signalling (inbound) |
+| | SBC → SIP Provider AU | UDP | AU Proxy SBC External IP Address | 40000-41999 | SIP Provider AU IP/s | Any | Media (outbound) |
+| | SIP Provider AU → SBC | UDP | SIP Provider AU IP/s | Any | AU Proxy SBC External IP Address | 40000-41999 | Media (inbound) |
+
+> **Note:** Telstra SIP is a REGISTER-type trunk (SBC initiates registration). However, media and SIP signalling flows are **bidirectional** from a network and firewall perspective. Restricting to outbound-only may cause issues with early media, inbound call setup, and call teardown. Firewall rules must permit both directions.
 
 #### Integration with SIP Provider US (US Proxy SBC)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with SIP Provider US | SBC → SIP Provider US | UDP/TCP | US Proxy SBC Internal IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling |
-| | SBC → SIP Provider US | UDP | US Proxy SBC Internal IP Address | 40000-41999 | SIP Provider US IP/s | Any | Media |
+| Integration with SIP Provider US | SBC → SIP Provider US | UDP/TCP | US Proxy SBC External IP Address | Any | SIP Provider US IP/s | 5060, 5061 | SIP Signalling (outbound) |
+| | SIP Provider US → SBC | UDP/TCP | SIP Provider US IP/s | Any | US Proxy SBC External IP Address | 5060, 5061 | SIP Signalling (inbound) |
+| | SBC → SIP Provider US | UDP | US Proxy SBC External IP Address | 40000-41999 | SIP Provider US IP/s | Any | Media (outbound) |
+| | SIP Provider US → SBC | UDP | SIP Provider US IP/s | Any | US Proxy SBC External IP Address | 40000-41999 | Media (inbound) |
 
-#### Integration with Downstream SBC
+> **Note:** The US carrier may support REGISTER-type SIP trunk configuration. Verify with the carrier whether SIP signalling is SBC-initiated (REGISTER) or carrier-initiated, and whether inbound SIP listening ports (UDP 5060, TCP 5061) are required. Regardless, media flows are bidirectional from a firewall perspective and both directions must be permitted.
+
+#### Integration with Downstream Devices (SBC, Media Pack, Cisco)
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| Integration with Downstream SBC | Sites → SBC | UDP | Downstream SBC IPs | Any | SBC Internal IP Address | 5060 | SIP Signalling |
-| | SBC → Sites | UDP | SBC Internal IP Address | Any | Downstream SBC IPs | 5060 | SIP Signalling |
-| | Sites → SBC | UDP | Downstream SBC IPs | Any | SBC Internal IP Address | 10000-19999 | Media |
-| | SBC → Sites | UDP | SBC Internal IP Address | 10000-19999 | Downstream SBC IPs | Any | Media |
+| Integration with Downstream Devices | Sites → SBC | TCP/UDP | Downstream Device IPs | Any | SBC Internal IP Address | 5060, 5061 | SIP Signalling |
+| | SBC → Sites | TCP/UDP | SBC Internal IP Address | Any | Downstream Device IPs | 5060, 5061 | SIP Signalling |
+| | Sites → SBC | UDP | Downstream Device IPs | Any | SBC Internal IP Address | 10000-19999 | Media |
+| | SBC → Sites | UDP | SBC Internal IP Address | 10000-19999 | Downstream Device IPs | Any | Media |
+
+> **TLS Between AudioCodes Devices:** TCP 5061 (TLS) is recommended for SIP trunks between AudioCodes devices (Proxy SBC, Downstream SBCs, Media Packs) to encrypt signalling data in transit. Configure a TLS Context on both the Proxy SBC and downstream devices for inter-device SIP connectivity.
 
 #### Integration with Other Proxy SBC
 
@@ -1993,15 +1995,17 @@ This section details all firewall rules required for the AudioCodes SBC solution
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| SIP Signalling | SBC → Telco Provider | UDP/TCP | SBC IP Address | Any | Telco Provider IP/s | To be confirmed with Telco | SIP Signalling |
-| Media | SBC → Telco Provider | UDP | SBC IP Address | 40000-41999 | Telco Provider IP/s | Any | Media |
+| SIP Signalling | SBC → Telco Provider | UDP/TCP | SBC IP Address | Any | Telco Provider IP/s | To be confirmed with Telco | SIP Signalling (outbound) |
+| SIP Signalling | Telco Provider → SBC | UDP/TCP | Telco Provider IP/s | Any | SBC IP Address | 5060, 5061 | SIP Signalling (inbound) |
+| Media | SBC → Telco Provider | UDP | SBC IP Address | 40000-41999 | Telco Provider IP/s | Any | Media (outbound) |
+| Media | Telco Provider → SBC | UDP | Telco Provider IP/s | Any | SBC IP Address | 40000-41999 | Media (inbound) |
 
 #### Integration with Proxy SBC
 
 | Service | Direction | Protocol | Source | Src Port | Destination | Dst Port | Remark |
 |---------|-----------|----------|--------|----------|-------------|----------|--------|
-| SIP Signalling | Sites → Proxy SBC | UDP | Downstream SBC IPs | Any | Proxy SBC Internal IP Address | 5060 | SIP Signalling |
-| SIP Signalling | Proxy SBC → Sites | UDP | Proxy SBC Internal IP Address | Any | Downstream SBC IPs | 5060 | SIP Signalling |
+| SIP Signalling | Sites → Proxy SBC | TCP/UDP | Downstream SBC IPs | Any | Proxy SBC Internal IP Address | 5060, 5061 | SIP Signalling |
+| SIP Signalling | Proxy SBC → Sites | TCP/UDP | Proxy SBC Internal IP Address | Any | Downstream SBC IPs | 5060, 5061 | SIP Signalling |
 | Media | Sites → Proxy SBC | UDP | Downstream SBC IPs | Any | Proxy SBC Internal IP Address | 10000-19999 | Media |
 | Media | Proxy SBC → Sites | UDP | Proxy SBC Internal IP Address | 10000-19999 | Downstream SBC IPs | Any | Media |
 
@@ -2267,8 +2271,9 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 
 - The enterprise SBC initiates registration and maintains the SIP trunk connection to the provider
 - Outbound SIP traffic from the SBC originates from the Virtual IP that "floats" between the Active and Standby SBCs
-- The provider does not initiate connections to the SBC - the SBC maintains the registration
-- Failover is transparent to the provider - the new Active SBC re-registers and resumes the connection
+- While the SBC initiates and maintains the SIP registration, **media and SIP signalling flows are bidirectional** from a network and firewall perspective. The provider will send inbound media (RTP/SRTP) and may send inbound SIP requests (e.g., INVITE for incoming calls, BYE, re-INVITE) to the SBC's Virtual IP
+- Firewall rules must permit **both** inbound and outbound SIP signalling and media between the SBC and the provider — restricting to outbound only may cause issues with early media, inbound calls, and call teardown
+- Failover is transparent to the provider — the new Active SBC re-registers and resumes the connection
 
 ![Diagram 7](png-diagrams/07-concept-overview.png)
 
@@ -2281,7 +2286,7 @@ When configuring SIP trunks with regional SIP providers (e.g., SIP Provider AU f
 
 | Traffic Type | Direction | Source IP Type | Failover Mechanism | Provider Action Required |
 |--------------|-----------|----------------|-------------------|-------------------------|
-| **Internal (SBC to Regional SIP Provider via Direct Connect)** | SBC initiates outbound registration and calls to provider via Direct Connect or VPN | Virtual IP (10.x.x.x) on Internal interface | VPC route table updated to point VIP to new Active SBC's ENI; new Active SBC re-registers | None - transparent |
+| **External (SBC to Regional SIP Provider)** | SBC initiates outbound registration and calls to provider | Virtual IP on External interface | VPC route table updated to point VIP to new Active SBC's ENI; new Active SBC re-registers | None - transparent |
 | **External (Teams from Internet)** | Microsoft Teams infrastructure from public internet | Elastic IP (public) on External interface | Elastic IP reassigned from failed SBC to Standby SBC | None - transparent |
 
 **Note:** Both failover mechanisms are handled automatically by the SBC HA pair calling AWS APIs. The regional SIP provider experiences a brief interruption but does not need to take any action.
@@ -2292,28 +2297,27 @@ When onboarding a new SIP trunk with a regional SIP provider (SIP Provider AU or
 
 | Information | Value | Notes |
 |-------------|-------|-------|
-| **SBC Source IP Address** | Virtual IP on Internal interface (e.g., 10.x.x.x) | Provider should expect SIP REGISTER and calls from this IP |
+| **SBC Source IP Address** | Virtual IP on External interface | Provider should expect SIP REGISTER and calls from this IP |
 | **Provider's SIP Server Address** | Provided by SIP Provider | The SBC will register to this address |
 | **SIP Port** | 5060 (UDP/TCP) or 5061 (TLS) | Based on your security requirements |
 | **Registration Credentials** | Username/password from provider | SBC uses these to authenticate with provider |
 | **Transport Protocol** | UDP, TCP, or TLS | TLS recommended for security |
 | **Codec Support** | G.711, G.729, etc. | As per your configuration |
 
-**Important:** The SBC initiates registration and maintains the connection to the provider. The provider does not need to initiate inbound connections to the SBC. Provide the provider with the **Virtual IP** as the expected source address for SIP traffic.
+**Important:** The SBC initiates SIP registration and maintains the trunk connection. However, from a **network and firewall perspective**, traffic flows are bidirectional — the provider will send inbound SIP requests (for incoming calls) and inbound media (RTP) to the SBC's Virtual IP. Ensure firewall rules permit both directions. Provide the provider with the **Virtual IP** as the expected source/destination address for SIP traffic.
 
 #### Failover Behavior and Call Impact
 
 Understanding what happens during failover helps set expectations with your regional SIP provider:
 
-| Scenario | Behavior |
-|----------|----------|
-| **Active calls in progress (PSTN)** | Calls are **dropped** - SIP is not call-stateful across failover. Callers must redial. |
-| **Active calls in progress (Teams IP)** | Calls may be **maintained** if using IP-based routing (Teams handles re-INVITE) |
-| **New calls during failover** | Brief interruption (seconds) while route table updates; new calls then succeed |
-| **New calls after failover** | Route seamlessly via the new Active SBC - no difference from caller perspective |
-| **Regional SIP provider reconfiguration** | **Not required** - the new Active SBC re-registers with the provider using the same VIP |
+| Scenario | Behaviour |
+|----------|-----------|
+| **Active calls in progress (PSTN and Teams)** | Calls should **not drop**. Call sessions are synchronised between Active and Standby SBCs via the HA link. As long as the Virtual IP re-assignment completes without issues, ongoing calls remain intact and continue on the newly Active SBC. |
+| **New calls during failover** | Brief interruption (seconds) while route table updates and VIP re-assignment completes; new calls then succeed |
+| **New calls after failover** | Route seamlessly via the new Active SBC — no difference from caller perspective |
+| **Regional SIP provider reconfiguration** | **Not required** — the new Active SBC re-registers with the provider using the same VIP |
 
-**Key Point:** Communicate to your regional SIP provider that during rare failover events, there may be a brief interruption lasting a few seconds while the new Active SBC re-registers. Active PSTN calls will drop and need to be re-established. However, the provider does **not** need to take any action - the new Active SBC automatically re-registers and resumes normal operation.
+**Key Point:** During failover, call sessions are synchronised between Active and Standby SBCs. Ongoing calls should remain intact provided the Virtual IP re-assignment completes successfully. There is no Re-INVITE mechanism in this HA model — call continuity is achieved through session state synchronisation and VIP failover. (Re-INVITE would apply in a Customer Edge SBC model or when using a load balancer instead of Virtual IPs, neither of which applies to this deployment.) Communicate to your regional SIP provider that during rare failover events, there may be a brief interruption lasting a few seconds while the new Active SBC re-registers. The provider does **not** need to take any action — the new Active SBC automatically re-registers and resumes normal operation.
 
 #### HA Connectivity Architecture Diagram
 
@@ -2326,8 +2330,8 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
 | Entity | Location | Connects To | IP Type | Interface | Failover Impact |
 |--------|----------|-------------|---------|-----------|-----------------|
 | Microsoft Teams | Internet | Elastic IP | Public | External (WAN) | EIP moves to new Active SBC |
-| SIP Provider AU (Direct Connect) | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
-| SIP Provider US (Direct Connect) | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
+| SIP Provider AU | On-premises / Carrier | Virtual IP | Per carrier connectivity | External (WAN) | Route table updated |
+| SIP Provider US | On-premises / Carrier | Virtual IP | Per carrier connectivity | External (WAN) | Route table updated |
 | Downstream SBCs | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
 | 3rd Party PBX | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
 | Registered Endpoints | On-premises | Virtual IP | Private (10.x.x.x) | Internal (LAN) | Route table updated |
@@ -2335,10 +2339,11 @@ The following diagram shows how different entities connect to the HA Proxy SBC p
 **Key Design Points:**
 
 1. **External entities** (Teams) connect via the **Elastic IP** on the WAN interface
-2. **Internal entities** (downstream SBCs, regional SIP providers, PBX) connect via the **Virtual IP** on the LAN interface
-3. **Regional SIP Providers:** Each Proxy SBC region has its own SIP provider for local PSTN breakout (SIP Provider AU for Australian Proxy SBC, SIP Provider US for US Proxy SBC)
-4. **Both IP types "float"** - they move to the Active SBC automatically on failover
-5. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
+2. **Internal entities** (downstream SBCs, PBX) connect via the **Virtual IP** on the LAN interface
+3. **Regional SIP Providers** connect via the **Virtual IP** on the External (WAN) interface. Although SIP Provider traffic may traverse Direct Connect for private connectivity, the SBC uses the External interface for SIP Provider signalling and media. During failover, the VIP on the External interface is re-assigned to the new Active SBC via route table update
+4. **Each region has its own SIP provider** for local PSTN breakout (SIP Provider AU for Australian Proxy SBC, SIP Provider US for US Proxy SBC)
+5. **All IP types "float"** - they move to the Active SBC automatically on failover
+6. **No entity needs reconfiguration** - the destination IP remains the same regardless of which SBC is Active
 
 ### Voice Recording Considerations
 
@@ -3167,7 +3172,6 @@ The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** licens
 
 - [ ] OVOC App Registration created
 - [ ] ARM WebUI App Registration created
-- [ ] ARM REST API App Registration created
 - [ ] SBC App Registration created (if SBA required)
 - [ ] All API permissions configured
 - [ ] Admin consent granted for all app registrations
@@ -3220,7 +3224,6 @@ The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** licens
 |-----------------|-----------|-----------|---------------|-------|
 | AudioCodes-OVOC-Teams-Integration | `________` | `________` | `________` | OVOC Teams QoE |
 | AudioCodes-ARM-WebUI | `________` | `________` | `________` | ARM Web Interface |
-| AudioCodes-ARM-REST-API | `________` | `________` | `________` | ARM API Access |
 | AudioCodes-SBC-DirectRouting | `________` | `________` | `________` | SBA Functionality |
 
 ### Break Glass Account Reference
@@ -3272,7 +3275,10 @@ The OVOC Data Analytics API requires the **"Analytic API Voice Quality"** licens
 
 | Component | Protocol | Port Range | Direction | Purpose |
 |-----------|----------|------------|-----------|---------|
-| SBC | UDP | 6000-41999 | Inbound/Outbound | RTP/SRTP Media |
+| SBC | UDP | 6000-19999 | Inbound/Outbound | RTP Media (Internal/Downstream) |
+| SBC | UDP | 20000-21999 | Inbound/Outbound | SRTP Media (Teams Direct Routing) |
+| SBC | UDP | 30000-39999 | Inbound/Outbound | RTP Media (LMO) |
+| SBC | UDP | 40000-41999 | Inbound/Outbound | RTP Media (PSTN) |
 | SBC | UDP | 49152-53247 | Outbound | Microsoft Teams Media |
 
 ### IP Range Summary (Microsoft Teams)
@@ -3350,13 +3356,13 @@ This appendix provides visual representations of all network flows in the AudioC
 | **Signalling** |
 | Teams → Proxy SBC | Microsoft 365 | Proxy SBC (WAN) | TCP | 5061 | TLS |
 | Proxy SBC → Teams | Proxy SBC (WAN) | Microsoft 365 | TCP | 5061 | TLS |
-| Internal SIP | Any Internal | Proxy SBC (LAN) | UDP | 5060 | None |
+| Internal SIP | Any Internal | Proxy SBC (LAN) | TCP/UDP | 5060, 5061 | None/TLS |
 | Endpoint SIP | Endpoints | Downstream SBC | UDP | 5060-5069 | None |
 | **Media** |
-| Teams Media | Microsoft 365 | Proxy SBC (WAN) | UDP | 20000-29999 | SRTP |
+| Teams Media | Microsoft 365 | Proxy SBC (WAN) | UDP | 20000-21999 | SRTP |
 | LMO Media | Teams Endpoints | SBC | UDP | 30000-39999 | RTP |
 | Internal Media | Downstream SBC | Proxy SBC | UDP | 10000-19999 | RTP |
-| PSTN Media | SBC | PSTN Provider | UDP | 40000-41999 | RTP |
+| PSTN Media | SBC / PSTN Provider | PSTN Provider / SBC | UDP | 40000-41999 | RTP |
 | 3rd Party PBX Media | Internal Systems | Proxy SBC | UDP | 6000-9999 | RTP |
 | **Management** |
 | SNMP Traps | SBC | OVOC | UDP | 162 | None |
@@ -3425,16 +3431,16 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 
 | Interface | Port | IP Interface | SIP Interface(s) | Media Realm(s) | Connects To |
 |-----------|------|--------------|------------------|----------------|-------------|
-| **eth0** | GE_1 | OAMP + LAN | Internal | Internal, LMO, PSTN | OVOC, Stack Manager, Downstream SBCs, IP Phones, SIP Provider |
-| **eth1** | GE_2 | WAN | External | M365 | Teams (bidirectional) |
-| **eth2** | GE_3 | HA | N/A | N/A | Standby SBC (heartbeat & state sync) |
+| **eth0** | GE_1 | HA | N/A | N/A | Standby SBC (heartbeat & state sync) |
+| **eth1** | GE_2 | OAMP + LAN | Internal | Internal, LMO | OVOC, Stack Manager, Downstream SBCs, IP Phones |
+| **eth2** | GE_3 | WAN | External | M365, PSTN | Teams (bidirectional), SIP Provider AU/US |
 
 **Key Concepts:**
-- **eth0 (OAMP + LAN)** - Combined management and internal interface carrying admin access (HTTPS, SSH, SNMP) and internal SIP signalling/media for branch offices, phones, and SIP providers
-- **eth1 (WAN)** - The external interface handles TWO types of traffic:
+- **eth0 (HA)** - Dedicated HA communication link to keep the Standby SBC synchronised, plus AWS API access for HA failover route table updates
+- **eth1 (OAMP + LAN)** - Combined management and internal interface carrying admin access (HTTPS, SSH, SNMP) and internal SIP signalling/media for branch offices and phones
+- **eth2 (WAN)** - The external interface handles TWO types of traffic:
   - **Microsoft Teams**: Bidirectional (Teams calls in, your calls out to Teams)
-  - **SIP Provider**: Outbound only (SBC registers with carrier; carrier sends calls back on same connection)
-- **eth2 (HA)** - Dedicated link to keep the Standby SBC synchronized
+  - **SIP Provider**: SBC initiates registration; media and SIP signalling flows are **bidirectional** from a firewall perspective
 
 ---
 
@@ -3452,7 +3458,7 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 
 | Appliance | Physical Ports | Ethernet Groups | IP Interfaces | Media Realms | SIP Interfaces | External Connectivity |
 |-----------|---------------|-----------------|---------------|--------------|----------------|----------------------|
-| **Proxy SBC (AWS)** | GE_1-GE_8 (Virtual) | 3 (OAMP+Internal, External, HA) | 3 (OAMP+LAN, WAN, HA) | 4 (Internal, M365, PSTN, LMO) | 3 (Internal, PSTN, External) | Teams, SIP Provider AU/US, Downstream SBCs |
+| **Proxy SBC (AWS)** | GE_1-GE_8 (Virtual) | 3 (HA, OAMP+Internal, External) | 3 (HA, OAMP+LAN, WAN) | 4 (Internal, M365, PSTN, LMO) | 3 (Internal, PSTN, External) | Teams, SIP Provider AU/US, Downstream SBCs |
 | **Downstream SBC** | GE_1-GE_4 | 2 (OAMP+Internal, HA) | 2 (OAMP+LAN, HA) | 1 (Internal) | 1 (Internal) | Proxy SBC, Registered Endpoints |
 | **Downstream SBC (LBO)** | GE_1-GE_4 | 2 (OAMP+Internal, HA) | 2 (OAMP+LAN, HA) | 2 (Internal, PSTN) | 2 (Internal, PSTN) | Proxy SBC, Registered Endpoints, Local PSTN |
 | **OVOC** | eth0 (ENI) | 1 | 1 | N/A | N/A | SBCs, Microsoft Graph API, Endpoints |
@@ -3483,6 +3489,8 @@ The diagram below shows the SBC as a "gateway" device. Think of it like a securi
 | 2.2 | 11 February 2026 | KS | Added Section 22A OVOC Data Analytics and Reporting: Documented OVOC Data Analytics API (direct PostgreSQL read-only access to analytics views), 24-hour data retention constraint, daily ETL pipeline to corporate data lake, Power BI integration, and comprehensive cyber security considerations (network access, credential management, access control, data classification, logging); Tightened SBC HA IAM policy per AudioCodes recommendation: Replaced 6-action Resource:* policy with least-privilege multi-statement policy using resource-scoped ARNs and tag-based conditions (ec2:AssociateAddress, ec2:DescribeAddresses, ec2:DescribeNetworkInterfaceAttribute, ec2:DescribeNetworkInterfaces, ec2:ReplaceRoute); Added temporal IAM elevation pattern for Stack Manager (detach broad permissions when not in active use); Updated OVOC Security Group (TCP 5432), Cloud East-West Firewall table, Section 16 OVOC Firewall Rules, Appendix C Port Summary, and Section 21 Security Architecture Summary for Analytics API; Added Data Analytics API license to OVOC Licensing section |
 | 2.3 | 12 February 2026 | KS | Replaced SBC management authentication from LDAPS to RADIUS with Cisco ISE as recommended AAA server; Documented AudioCodes VSA dictionary (Vendor ID 5003, ACL-Auth-Level attribute 35) with role mapping (Security Administrator=200, Administrator=100, Monitor=50); Noted TACACS+ is not supported on AudioCodes SBC products (MSBR only); Added OVOC audit logging requirements to OVOC Security Group (syslog UDP 514 inbound, TCP 514 outbound, SNMP trap forwarding UDP 1164-1174); Documented OVOC dual-layer audit logging (OS-level auditd + application-level Actions Journal) with SIEM integration paths; Updated SBC firewall rules from LDAPS (TCP 636) to RADIUS (UDP 1812/1813); Updated Section 21 security architecture summary; Added Stack Manager supported OS list and SOE compatibility; Clarified bidirectional SIP connectivity for site SBCs, third-party PBX, and ATAs |
 | 2.4 | 12 February 2026 | KS | Added CDR access auditing guidance to Section 22A: Documented that OVOC does not natively log individual SQL queries via the Analytics API; Added 4-layer auditing approach for Analytics API (PostgreSQL native logging, pgAudit extension, network-level logging, data lake audit); Documented shared analytics account limitation and mitigations (IP attribution, application_name tagging, ETL-only restriction, database proxy); Added compliance summary table mapping audit questions to solutions; Documented OVOC GUI CDR viewing audit limitation — no native capability to log which operator viewed specific CDR records through the web GUI without considerable OS-level modification; Added 7 mitigations for GUI audit gap (RBAC, GDPR phone number masking, web server access log enhancement, Linux auditd, network-level monitoring, reverse proxy with enhanced logging, data lake as controlled access point); Included risk acceptance template for compliance documentation |
+
+| 2.5 | 12 February 2026 | KS | Network interface remapping and security architecture update addressing 10 items of stakeholder feedback: (1) Remapped SBC network interfaces — eth0=HA, eth1=OAMP+LAN, eth2=WAN (previously eth0=OAMP+LAN, eth1=WAN, eth2=HA); updated all interface tables, Key Concepts, and D.8.8 Matrix; (2) Clarified HA scope — Transit Gateway exclusion applies to HA failover VIP routing only; Virtual IPs must be routable cross-region for SBC-to-SBC connectivity via organisation’s existing network backbone; (3) Added cross-region VPC CIDR inbound rules to SBC, ARM, and OVOC Security Groups for US-AU management and SBC connectivity; (4) Split single SBC Security Group into three per-interface groups (HA, Internal, External) assigned to respective ENIs; added SNMP 161 and HTTPS 443 inbound from OVOC to Internal SG; narrowed Teams media to 20000-21999, PSTN media 40000-41999 on External interface; (5) Added Local Media Optimisation (LMO) scope clarification — applies to local users only, requires EUC/voice subnet mapping in Teams admin centre; (6) Removed App Registration 3 (ARM REST API Authentication) and all references (summary table, checklist, credentials template); renumbered App Registration 4 to 3; (7) Updated Section 16 firewall rules — Teams media 20000-21999; added bidirectional SIP signalling and media rules for SIP Provider AU (Telstra REGISTER-type) and US; added inbound SIP listening ports for carriers; renamed Downstream SBC to Downstream Devices (SBC, Media Pack, Cisco); added TCP 5061 (TLS) for inter-device SIP trunks; (8) Updated failover behaviour — ongoing calls should not drop during HA switchover; call sessions synchronised between Active/Standby; no Re-INVITE in VIP-based HA model; (9) Updated SIP trunk flow direction — clarified media and SIP signalling are bidirectional from firewall perspective for all SIP Providers; restricting to outbound-only may cause early media issues; (10) Clarified authentication model — SBCs use RADIUS (Cisco ISE) for direct access, OVOC/ARM use Azure Entra ID; OVOC provides SSO for centralised SBC management via Entra ID; moved SIP Provider connectivity from Internal to External interface; updated PSTN_Media_Realm binding, Proxy Set SIP Interfaces, Cloud East-West Firewall scope; updated Appendix C/D port summaries; updated Mermaid diagrams (d8-7 complete solution and simplified); fixed pre-existing inconsistencies (LDAPS→RADIUS in diagrams, US Stack Manager removal from simplified diagram); Cascaded interface remapping through Section 11 SBC configuration tables (Virtual Ports, Ethernet Groups, Ethernet Device Config — Group 1=HA, Group 2=OAMP+Internal, Group 3=External) and Section 19 HA/failover SIP Provider interface references (Internal→External) |
 
 ---
 

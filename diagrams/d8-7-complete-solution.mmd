@@ -38,8 +38,8 @@ flowchart TB
         end
 
         subgraph ProxyInterfaces["Interfaces"]
-            ExtIF["External (WAN)<br/>TLS 5061 | SRTP 20000-29999"]
-            IntIF["Internal (LAN)<br/>UDP 5060 | RTP 6000-49999"]
+            ExtIF["External (WAN)<br/>TLS 5061 | SRTP 20000-21999"]
+            IntIF["Internal (LAN)<br/>UDP 5060 | RTP 6000-41999"]
         end
 
         subgraph MgmtZone["⚙️ Management Zone"]
@@ -148,8 +148,8 @@ flowchart TB
     %% CONNECTIONS - On-Premises Internal
     %% ============================================================
     DSSBCLBO -->|"SIP Trunk"| LocalPSTN
-    DSSBC <-->|"LDAPS 636"| AD
-    DSSBCLBO <-->|"LDAPS 636"| AD
+    DSSBC <-->|"RADIUS 1812/1813"| AD
+    DSSBCLBO <-->|"RADIUS 1812/1813"| AD
 
     DSSBC -->|"SIP 5060-5069<br/>RTP"| IPPhones
     DSSBC --> SoftClients
