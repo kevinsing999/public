@@ -1,0 +1,98 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f4f4f4', 'primaryTextColor': '#333', 'primaryBorderColor': '#333', 'lineColor': '#666', 'secondaryColor': '#f4f4f4', 'tertiaryColor': '#fff'}}}%%
+%% Diagram 09: HA Connectivity Architecture
+%% Shows how different entity types connect to the HA Proxy SBC pair
+
+flowchart TB
+    %% Internet Layer
+    subgraph Internet["INTERNET — EXTERNAL CONNECTIVITY (via Public IP)"]
+        direction LR
+        Teams["Microsoft Teams<br/>52.112.0.0/14<br/>(Inbound & Outbound)"]
+    end
+
+    %% Elastic IP
+    EIP["ELASTIC IP (Public)<br/>e.g., 54.x.x.x<br/>(Moves on failover)"]
+
+    %% AWS VPC
+    subgraph VPC["AWS VPC"]
+        ExtIF["EXTERNAL INTERFACE (WAN)"]
+        RouteNote["VPC Route Table points<br/>VIP to Active SBC<br/>(Updated on failover)"]
+
+        subgraph HASBCS["HA PROXY SBC PAIR"]
+            subgraph AZB["Availability Zone B"]
+                Standby["SBC #2 (STANDBY)<br/>Ready to take over on failure"]
+            end
+            subgraph AZA["Availability Zone A"]
+                Active["SBC #1 (ACTIVE)<br/>Handles all traffic"]
+            end
+        end
+
+        IntIF["INTERNAL INTERFACE (LAN)"]
+    end
+
+    %% External VIP for SIP Provider
+    ExtVIP["VIRTUAL IP (External)<br/>on WAN interface<br/>(Floats between SBC #1 and #2)"]
+
+    %% Internal VIP
+    IntVIP["VIRTUAL IP (Internal)<br/>10.x.x.x<br/>(Floats between SBC #1 and #2)"]
+
+    %% External Entities (SIP Provider)
+    subgraph ExtEntities["EXTERNAL CONNECTIVITY — SIP PROVIDERS"]
+        direction LR
+        SIPAU["Regional SIP Provider<br/>(AU/US)<br/>via Direct Connect or Internet"]
+    end
+
+    %% On-Premises
+    subgraph OnPrem["ON-PREMISES — INTERNAL CONNECTIVITY (via Direct Connect / VPN)"]
+        direction LR
+        DSSBC["Downstream SBCs<br/>Sites with local endpoints"]
+        PBX["3rd Party PBX<br/>On-prem integrations"]
+    end
+
+    %% Note boxes
+    IntNote["All internal entities connect<br/>to the SAME Virtual IP (10.x.x.x).<br/>They are unaware of which<br/>physical SBC is currently Active."]
+    ExtNote["SIP Providers connect via<br/>the External interface VIP.<br/>SIP and media are bidirectional<br/>from a firewall perspective."]
+
+    %% Connections - External
+    Teams <-->|"Inbound/Outbound"| EIP
+    EIP <-->|"Inbound/Outbound"| ExtIF
+    ExtIF --- Active
+
+    %% Connections - SIP Provider via External VIP
+    ExtIF --> ExtVIP
+    ExtVIP <-->|"Bidirectional<br/>SIP + Media"| SIPAU
+
+    %% Connections - HA
+    Active <-.->|"HA Link<br/>Heartbeat"| Standby
+
+    %% Connections - Internal
+    Active <--> IntIF
+    IntIF --> IntVIP
+    IntVIP <-->|"Direct Connect / VPN"| DSSBC
+    IntVIP <-->|"Direct Connect / VPN"| PBX
+
+    %% Route note
+    RouteNote -.-> ExtIF
+
+    %% Note associations
+    IntNote ~~~ IntVIP
+    ExtNote ~~~ ExtVIP
+
+    %% Styling
+    classDef internet fill:#1a73e8,stroke:#0d47a1,stroke-width:2px,color:#fff,font-weight:bold
+    classDef external fill:#ff9900,stroke:#cc7a00,stroke-width:2px,color:#000,font-weight:bold
+    classDef sbc fill:#34a853,stroke:#1e7e34,stroke-width:2px,color:#fff,font-weight:bold
+    classDef interface fill:#ffeb3b,stroke:#f57f17,stroke-width:2px,color:#000,font-weight:bold
+    classDef vip fill:#e8f5e9,stroke:#2e7d32,stroke-width:2px,color:#000,font-weight:bold
+    classDef onprem fill:#757575,stroke:#424242,stroke-width:2px,color:#fff,font-weight:bold
+    classDef note fill:#fff9c4,stroke:#f9a825,stroke-width:1px,color:#333
+    classDef eip fill:#ce93d8,stroke:#7b1fa2,stroke-width:2px,color:#000,font-weight:bold
+    classDef sipext fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000,font-weight:bold
+
+    class Teams internet
+    class EIP eip
+    class ExtIF,IntIF interface
+    class Active,Standby sbc
+    class IntVIP,ExtVIP vip
+    class DSSBC,PBX onprem
+    class SIPAU sipext
+    class IntNote,ExtNote,RouteNote note

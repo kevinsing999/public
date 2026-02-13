@@ -38,8 +38,8 @@ flowchart TB
         end
 
         subgraph ProxyInterfaces["Interfaces"]
-            ExtIF["External (WAN)<br/>TLS 5061 | SRTP 20000-21999"]
-            IntIF["Internal (LAN)<br/>UDP 5060 | RTP 6000-41999"]
+            ExtIF["External (WAN)<br/>TLS 5061 | SRTP 20000-21999<br/>SIP Provider UDP/TCP 5060-5061 | RTP 40000-41999"]
+            IntIF["Internal (LAN)<br/>UDP 5060 | RTP 6000-19999"]
         end
 
         subgraph MgmtZone["⚙️ Management Zone"]
@@ -65,7 +65,6 @@ flowchart TB
 
         subgraph USMgmt["US Management"]
             direction LR
-            USStackMgr["Stack Manager<br/>t3.medium"]
             ARMRtrUS["ARM Router US<br/>m4.large"]
         end
     end
@@ -110,7 +109,7 @@ flowchart TB
     GraphAPI <-->|"HTTPS 443<br/>Webhooks"| OVOC
     LoginAPI -->|"OAuth 443"| OVOC
     LoginAPI -->|"OAuth 443"| ARMCfg
-    SIPAU -->|"UDP 5060<br/>RTP"| IntIF
+    SIPAU -->|"UDP 5060<br/>RTP"| ExtIF
     SIPUS -->|"UDP 5060<br/>RTP"| USActive
 
     %% ============================================================
@@ -127,8 +126,6 @@ flowchart TB
     ARMCfg -->|"HTTPS 443"| ARMRtrAU
     ARMRtrAU -->|"Routing"| AUActive
 
-    USStackMgr --> USActive
-    USStackMgr --> USStandby
     ARMRtrUS --> USActive
 
     %% ============================================================
@@ -182,7 +179,7 @@ flowchart TB
     %% ============================================================
     class Teams,GraphAPI,LoginAPI,SIPAU,SIPUS internet
     class AUActive,AUStandby,USActive,USStandby sbc
-    class StackMgr,OVOC,ARMCfg,ARMRtrAU,USStackMgr,ARMRtrUS management
+    class StackMgr,OVOC,ARMCfg,ARMRtrAU,ARMRtrUS management
     class DSSBC,DSSBCLBO,PBX,Radio,AnalogGW,AD,LocalPSTN onprem
     class IPPhones,SoftClients,ConfRooms endpoints
     class HAVIP ha

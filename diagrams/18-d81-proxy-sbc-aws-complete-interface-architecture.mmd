@@ -1,0 +1,116 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#f4f4f4', 'primaryTextColor': '#333', 'primaryBorderColor': '#333', 'lineColor': '#666', 'secondaryColor': '#f4f4f4', 'tertiaryColor': '#fff'}}}%%
+%% Diagram 18: D.8.1 Proxy SBC (AWS) - Complete Interface Architecture
+%% Shows GE Ports → Ethernet Groups → IP Interfaces → Media Realms → SIP Interfaces → IP Groups
+
+flowchart LR
+    %% ============================================================
+    %% ETHERNET GROUPS (left side)
+    %% ============================================================
+    subgraph EG["ETHERNET GROUPS"]
+        direction TB
+        subgraph EG1["Ethernet Group 1 (HA)"]
+            direction LR
+            GE1["GE_1"]
+            GE5["GE_5"]
+        end
+        subgraph EG2["Ethernet Group 2 (OAMP + Internal)"]
+            direction LR
+            GE2["GE_2"]
+            GE6["GE_6"]
+        end
+        subgraph EG3["Ethernet Group 3 (External)"]
+            direction LR
+            GE3["GE_3"]
+            GE7["GE_7"]
+        end
+    end
+
+    %% ============================================================
+    %% IP INTERFACES
+    %% ============================================================
+    subgraph IPIF["IP INTERFACES"]
+        direction TB
+        IP0["Index 0: HA<br/>Application: Maintenance<br/>Mode: IPv4 Manual"]
+        IP1["Index 1: OAMP + Internal (LAN)<br/>Application: OAMP + Media + Control<br/>Mode: IPv4 Manual"]
+        IP2["Index 2: External (WAN)<br/>Application: Media + Control<br/>Mode: IPv4 Manual"]
+    end
+
+    %% ============================================================
+    %% MEDIA REALMS
+    %% ============================================================
+    subgraph MR["MEDIA REALMS"]
+        direction TB
+        MR0["Index 0: Internal_Media_Realm<br/>Interface: OAMP + Internal (LAN)<br/>RTP: 1000 legs"]
+        MR1["Index 1: M365_Media_Realm<br/>Interface: External (WAN)<br/>RTP: 1000 legs"]
+        MR2["Index 2: PSTN_Media_Realm<br/>Interface: External (WAN)<br/>RTP: 500 legs"]
+        MR3["Index 3: LMO_Media_Realm<br/>Interface: OAMP + Internal (LAN)<br/>RTP: 1000 legs"]
+    end
+
+    %% ============================================================
+    %% SIP INTERFACES
+    %% ============================================================
+    subgraph SI["SIP INTERFACES"]
+        direction TB
+        SI0["Index 0: Internal (LAN)<br/>Network: OAMP + Internal<br/>Media: Internal_Media_Realm"]
+        SI1["Index 1: PSTN<br/>Network: External (WAN)<br/>Media: PSTN_Media_Realm"]
+        SI2["Index 2: External<br/>Network: External (WAN)<br/>Media: M365_Media_Realm<br/>TLS Context: Teams"]
+    end
+
+    %% ============================================================
+    %% IP GROUPS / DESTINATIONS
+    %% ============================================================
+    subgraph IG["IP GROUPS (Trunk Destinations)"]
+        direction TB
+        IG1["Teams Direct Routing<br/>Proxy Set: External (WAN)<br/>TLS: Teams"]
+        IG2["Downstream SBC<br/>Proxy Set: Internal (LAN)"]
+        IG3["3rd Party PBX & Radio<br/>Proxy Set: Internal (LAN)"]
+        IG4["SIP Provider AU Trunk<br/>Proxy Set: External (WAN)<br/>Media: PSTN_Media_Realm"]
+        IG5["SIP Provider US Trunk<br/>Proxy Set: External (WAN)<br/>Media: PSTN_Media_Realm"]
+        IG6["Proxy-to-Proxy<br/>Proxy Set: Internal (LAN)"]
+        IG7["LMO (Registered/Unregistered)<br/>Media: LMO_Media_Realm"]
+    end
+
+    %% ============================================================
+    %% CONNECTIONS
+    %% ============================================================
+    %% Ethernet Groups → IP Interfaces
+    EG1 --> IP0
+    EG2 --> IP1
+    EG3 --> IP2
+
+    %% IP Interfaces → Media Realms
+    IP1 --> MR0
+    IP2 --> MR1
+    IP2 --> MR2
+    IP1 --> MR3
+
+    %% Media Realms → SIP Interfaces
+    MR0 --> SI0
+    MR2 --> SI1
+    MR1 --> SI2
+
+    %% SIP Interfaces → IP Groups
+    SI2 --> IG1
+    SI0 --> IG2
+    SI0 --> IG3
+    SI1 --> IG4
+    SI1 --> IG5
+    SI0 --> IG6
+    MR3 --> IG7
+
+    %% ============================================================
+    %% STYLING
+    %% ============================================================
+    classDef ethgrp fill:#bbdefb,stroke:#1565c0,stroke-width:2px,color:#000
+    classDef ipif fill:#c8e6c9,stroke:#2e7d32,stroke-width:2px,color:#000
+    classDef media fill:#fff9c4,stroke:#f57f17,stroke-width:2px,color:#000
+    classDef sipif fill:#e1bee7,stroke:#7b1fa2,stroke-width:2px,color:#000
+    classDef ipgrp fill:#ffccbc,stroke:#d84315,stroke-width:2px,color:#000
+    classDef ha fill:#ef9a9a,stroke:#c62828,stroke-width:2px,color:#000
+
+    class GE1,GE5,GE2,GE6,GE3,GE7 ethgrp
+    class IP0 ha
+    class IP1,IP2 ipif
+    class MR0,MR1,MR2,MR3 media
+    class SI0,SI1,SI2 sipif
+    class IG1,IG2,IG3,IG4,IG5,IG6,IG7 ipgrp
