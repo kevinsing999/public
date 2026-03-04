@@ -81,7 +81,7 @@ The guide demonstrates several security design strengths that should be acknowle
 
 ### S-01: Least-Privilege SBC IAM Policy (Section 20, Lines 2523-2577)
 
-The SBC IAM policy for HA failover uses resource-scoped ARNs and tag-based conditions (`aws:ResourceTag/Env`, `aws:ResourceTag/App`) for the `ec2:ReplaceRoute` and `ec2:AssociateAddress` actions. Only the `Describe` actions use `Resource: "*"`, which is an AWS API limitation. This is a well-designed least-privilege policy that follows the principle of minimal necessary permissions.
+The SBC IAM policy for HA failover uses resource-scoped ARNs and tag-based conditions for two distinct failover mechanisms: `ec2:ReplaceRoute` (scoped to a specific route table ARN with `aws:ResourceTag/Env` condition) for internal Virtual IP failover, and `ec2:AssociateAddress` (scoped to a specific EIP allocation ARN with dual `aws:ResourceTag/App` and `aws:ResourceTag/Env` conditions) for external Elastic IP reassignment. Only the `Describe` actions use `Resource: "*"`, which is an AWS API limitation. The separation of internal VIP routing (route table manipulation) from external EIP reassignment (address association) reflects a well-designed least-privilege policy with independent scoping for each failover path.
 
 ### S-02: Dual External Publishing Pattern (Section 5, Lines 455-521)
 
@@ -633,14 +633,23 @@ Verify that the deployed AudioCodes firmware version (7.4.500+) supports TLS 1.3
 | **Guide Reference** | Section 20, Lines 2541-2551; Section 19, Lines 2265-2271 |
 
 **Description:**
-The SBC IAM policy's `AllowReplaceRoute` statement (Section 20, Line 2542) grants `ec2:ReplaceRoute` scoped to a specific route table ARN with an `aws:ResourceTag/Env` condition. While this is correctly scoped at the route table level, AWS IAM does not expose condition keys for individual route entry parameters — there is no `ec2:DestinationCidrBlock` or `ec2:NetworkInterfaceId` condition key available. This means a compromised SBC instance can replace *any* route entry within the permitted route table, not just the Virtual IP routes it legitimately manages during HA failover.
+The SBC HA failover mechanism uses two independent AWS API paths with distinct IAM scoping:
+
+- **Internal (LAN) failover — `ec2:ReplaceRoute`:** The Virtual IP (VIP) is a private IP (e.g., `10.x.x.x/32`) that exists as a route entry in the VPC route table, pointing to the active SBC's internal ENI. On failover, the standby SBC calls `ec2:ReplaceRoute` to swing that route to its own ENI. This is the path used by downstream SBCs, PBX systems, and regional SIP providers connecting via the internal interface.
+
+- **External (WAN) failover — `ec2:AssociateAddress`:** The Elastic IP (EIP) is a public IP associated with the active SBC's WAN ENI. On failover, the standby SBC calls `ec2:AssociateAddress` to move the EIP to its own WAN ENI. This is the path used by Microsoft Teams connecting from the internet. No route table manipulation is involved — it is a direct IP reassociation at the AWS networking layer. The `AssociateAddress` permission is already tightly scoped to a specific EIP allocation ARN with dual tag conditions (`aws:ResourceTag/App` + `aws:ResourceTag/Env`).
+
+The security concern applies exclusively to the `ReplaceRoute` path. The `AllowReplaceRoute` statement (Section 20, Line 2542) grants `ec2:ReplaceRoute` scoped to a specific route table ARN with an `aws:ResourceTag/Env` condition. While this is correctly scoped at the route table level, AWS IAM does not expose condition keys for individual route entry parameters — there is no `ec2:DestinationCidrBlock` or `ec2:NetworkInterfaceId` condition key available. This means a compromised SBC instance can replace *any* route entry within the permitted route table, not just the VIP routes it legitimately manages during internal failover.
 
 **Risk/Impact:**
 A compromised SBC could inject arbitrary routes into the VPC route table, potentially redirecting traffic destined for other subnets or services through the compromised instance. This could enable man-in-the-middle attacks on non-voice traffic, traffic interception, or denial of service to other workloads sharing the VPC. The risk is bounded by the route table scope (single table, tagged environment), but the inability to restrict modifications to specific VIP destination CIDRs (e.g., `10.x.x.x/32`) represents a residual lateral movement vector.
 
+Note that the external (EIP) failover path is not affected by this finding — `ec2:AssociateAddress` is scoped to a specific EIP allocation ARN, meaning a compromised SBC can only reassign that one Elastic IP, not arbitrary addresses.
+
 **Evidence:**
-- Section 20, Line 2544: `"Action": "ec2:ReplaceRoute"` — grants route replacement capability
+- Section 20, Line 2544: `"Action": "ec2:ReplaceRoute"` — grants route replacement capability for internal VIP failover
 - Section 20, Line 2545: `"Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:route-table/<ROUTE_TABLE_ID>"` — scoped to route table, not individual routes
+- Section 20, Lines 2553-2564: `"Action": "ec2:AssociateAddress"` — external EIP failover, scoped to specific EIP ARN with dual tag conditions (not affected by this finding)
 - AWS IAM Service Authorisation Reference: `ec2:ReplaceRoute` supports only resource-level permissions (route table ARN) and tag-based conditions; no request-level condition keys exist for destination CIDR or target parameters
 - Section 19, Lines 2269-2270: Failover updates route for VIP only, but IAM cannot enforce this restriction
 
@@ -895,7 +904,20 @@ The following table identifies areas where the guide deviates from established s
 
 ### Summary
 
-AWS IAM cannot restrict `ec2:ReplaceRoute` to specific route entries within a route table — there are no condition keys for destination CIDR or target ENI. The SBC IAM policy is already at maximum IAM granularity (specific route table ARN + environment tag condition). To close this gap, a multi-layered compensating control architecture is recommended using EventBridge, Lambda, and AWS Config to provide the route-entry-level enforcement that IAM cannot deliver natively.
+The SBC HA failover mechanism uses two independent AWS API paths:
+
+| | Internal (VIP) | External (EIP) |
+|---|---|---|
+| **IP type** | Private (`10.x.x.x/32`) | Public (Elastic IP) |
+| **Failover API** | `ec2:ReplaceRoute` | `ec2:AssociateAddress` |
+| **What moves** | VPC route table entry | EIP association |
+| **Connects to** | Downstream SBCs, PBX, SIP providers | Microsoft Teams |
+| **IAM scoping** | Route table ARN + `Env` tag | EIP allocation ARN + `App` + `Env` tags |
+| **Granularity concern** | Cannot restrict to specific route entries | Already scoped to specific EIP — no concern |
+
+This finding applies exclusively to the **internal VIP path** (`ec2:ReplaceRoute`). AWS IAM cannot restrict `ec2:ReplaceRoute` to specific route entries within a route table — there are no condition keys for destination CIDR or target ENI. The SBC IAM policy is already at maximum IAM granularity (specific route table ARN + environment tag condition). The external EIP path (`ec2:AssociateAddress`) is already tightly scoped to a specific EIP allocation ARN with dual tag conditions and is not affected.
+
+To close the gap on the internal path, a multi-layered compensating control architecture is recommended using EventBridge, Lambda, and AWS Config to provide the route-entry-level enforcement that IAM cannot deliver natively.
 
 The architecture uses a **deny-by-default, automated containment** model. When an SBC calls `ec2:ReplaceRoute`, the event is captured by CloudTrail and delivered to EventBridge in near-real-time (5-15 seconds). A Lambda function with provisioned concurrency validates the route change against a strict allowlist of approved VIP CIDRs and SBC ENI IDs stored in SSM Parameter Store. If the change is legitimate (e.g., a normal HA failover), the Lambda updates the known-good state and logs the event. If any validation check fails, the Lambda executes a fully automated containment sequence: reverting the route, revoking the instance's IAM permissions, quarantining it behind a restrictive security group, and raising a P1 alert. A 60-second scheduled canary Lambda provides an independent backstop by continuously polling the route table state.
 
@@ -1072,6 +1094,7 @@ The compromised instance is intentionally left running in quarantine (no `ec2:St
 
 | Decision | Rationale |
 |----------|-----------|
+| **Scoped to internal VIP path only** | External EIP failover (`AssociateAddress`) is already tightly scoped to a specific EIP ARN with dual tag conditions — no compensating controls needed for that path |
 | **Reactive, not preventive** | AudioCodes firmware calls EC2 API directly; cannot be intercepted or proxied through Lambda |
 | **Deny by default** | All four validation checks (CIDR, ENI, IAM role, source IP) must pass; any single failure triggers containment |
 | **No instance stop** | Compromised instance left running in quarantine to preserve volatile memory, process state, and network metadata for forensic investigation |
