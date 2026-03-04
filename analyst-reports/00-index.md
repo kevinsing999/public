@@ -12,7 +12,7 @@
 
 | # | Report | Reviewer Role | Findings | Rating | Link |
 |---|--------|---------------|----------|--------|------|
-| 01 | Cybersecurity Analyst Review | Senior Cybersecurity Analyst | 16 | Conditional Approval | [01-cybersecurity-analyst-review.md](01-cybersecurity-analyst-review.md) |
+| 01 | Cybersecurity Analyst Review | Senior Cybersecurity Analyst | 17 | Conditional Approval | [01-cybersecurity-analyst-review.md](01-cybersecurity-analyst-review.md) |
 | 02 | AWS Cloud Engineer Review | Senior AWS Cloud Engineer | 15 | Conditional Go | [02-aws-cloud-engineer-review.md](02-aws-cloud-engineer-review.md) |
 | 03 | SBC Engineer Review | Senior SBC / Voice Engineer | 15 | Conditionally Adequate | [03-sbc-engineer-review.md](03-sbc-engineer-review.md) |
 | 04 | Solution Architect Review | Senior Solution Architect | 15 | Adequate with Reservations | [04-solution-architect-review.md](04-solution-architect-review.md) |
@@ -27,12 +27,12 @@
 
 | Report | Critical | High | Medium | Low | Total |
 |--------|----------|------|--------|-----|-------|
-| 01 — Cybersecurity | 1 | 3 | 10 | 2 | **16** |
+| 01 — Cybersecurity | 1 | 3 | 11 | 2 | **17** |
 | 02 — AWS Cloud | 0 | 4 | 7 | 4 | **15** |
 | 03 — SBC Engineer | 3 | 3 | 6 | 3 | **15** |
 | 04 — Solution Architect | 1 | 4 | 8 | 2 | **15** |
 | 05 — Consultant | 4 | 3 | 6 | 2 | **15** |
-| **Total** | **9** | **17** | **37** | **13** | **76** |
+| **Total** | **9** | **17** | **38** | **13** | **77** |
 
 ### Cross-Cutting Themes by Severity
 
@@ -82,7 +82,7 @@ These actions are derived from cross-cutting findings that appear across multipl
 
 | Prefix | Report | Range |
 |--------|--------|-------|
-| F-CS | Cybersecurity Analyst | F-CS-001 to F-CS-016 |
+| F-CS | Cybersecurity Analyst | F-CS-001 to F-CS-017 |
 | F-AW | AWS Cloud Engineer | F-AW-001 to F-AW-015 |
 | F-SB | SBC Engineer | F-SB-001 to F-SB-015 |
 | F-SA | Solution Architect | F-SA-001 to F-SA-015 |
@@ -96,7 +96,7 @@ These actions are derived from cross-cutting findings that appear across multipl
 ```
 analyst-reports/
 ├── 00-index.md                              ← This file (dashboard)
-├── 01-cybersecurity-analyst-review.md       ← 16 findings (F-CS-001 to F-CS-016)
+├── 01-cybersecurity-analyst-review.md       ← 17 findings (F-CS-001 to F-CS-017)
 ├── 02-aws-cloud-engineer-review.md          ← 15 findings (F-AW-001 to F-AW-015)
 ├── 03-sbc-engineer-review.md                ← 15 findings (F-SB-001 to F-SB-015)
 ├── 04-solution-architect-review.md          ← 15 findings (F-SA-001 to F-SA-015)

@@ -20,7 +20,7 @@
 
 The AudioCodes AWS Deployment Guide v2.6 is a comprehensive engineering document that demonstrates mature awareness of cloud infrastructure security, network segmentation, and identity management. It is clear that security has been considered throughout the design process rather than bolted on as an afterthought. The guide's treatment of VPC Endpoints (PrivateLink), least-privilege SBC IAM policies with tag-based conditions, cloud east-west firewall inspection, and dual external publishing patterns reflects a well-considered security architecture.
 
-However, this review has identified 16 substantive findings across identity and access management, data protection, network security, and operational security domains. Three findings are rated Critical or High and must be addressed before production deployment.
+However, this review has identified 17 substantive findings across identity and access management, data protection, network security, and operational security domains. Three findings are rated Critical or High and must be addressed before production deployment.
 
 ### Top 3 Findings
 
@@ -624,6 +624,38 @@ Verify that the deployed AudioCodes firmware version (7.4.500+) supports TLS 1.3
 
 ---
 
+### F-CS-017: SBC ReplaceRoute IAM Lacks Route-Entry Granularity
+
+| Attribute | Detail |
+|-----------|--------|
+| **Severity** | Medium |
+| **Category** | Identity and Access Management |
+| **Guide Reference** | Section 20, Lines 2541-2551; Section 19, Lines 2265-2271 |
+
+**Description:**
+The SBC IAM policy's `AllowReplaceRoute` statement (Section 20, Line 2542) grants `ec2:ReplaceRoute` scoped to a specific route table ARN with an `aws:ResourceTag/Env` condition. While this is correctly scoped at the route table level, AWS IAM does not expose condition keys for individual route entry parameters — there is no `ec2:DestinationCidrBlock` or `ec2:NetworkInterfaceId` condition key available. This means a compromised SBC instance can replace *any* route entry within the permitted route table, not just the Virtual IP routes it legitimately manages during HA failover.
+
+**Risk/Impact:**
+A compromised SBC could inject arbitrary routes into the VPC route table, potentially redirecting traffic destined for other subnets or services through the compromised instance. This could enable man-in-the-middle attacks on non-voice traffic, traffic interception, or denial of service to other workloads sharing the VPC. The risk is bounded by the route table scope (single table, tagged environment), but the inability to restrict modifications to specific VIP destination CIDRs (e.g., `10.x.x.x/32`) represents a residual lateral movement vector.
+
+**Evidence:**
+- Section 20, Line 2544: `"Action": "ec2:ReplaceRoute"` — grants route replacement capability
+- Section 20, Line 2545: `"Resource": "arn:aws:ec2:<REGION>:<ACCOUNT_ID>:route-table/<ROUTE_TABLE_ID>"` — scoped to route table, not individual routes
+- AWS IAM Service Authorisation Reference: `ec2:ReplaceRoute` supports only resource-level permissions (route table ARN) and tag-based conditions; no request-level condition keys exist for destination CIDR or target parameters
+- Section 19, Lines 2269-2270: Failover updates route for VIP only, but IAM cannot enforce this restriction
+
+**Recommendation:**
+Implement the following compensating controls since IAM cannot restrict `ReplaceRoute` to specific route entries:
+
+1. **Dedicated VIP route table.** Place only VIP routes (`10.x.x.x/32` entries) in the route table referenced by the SBC IAM policy. If the route table contains no non-VIP routes, the blast radius of a compromised `ReplaceRoute` call is limited to VIP entries only.
+2. **CloudTrail alerting.** Configure a CloudWatch Events rule (or EventBridge rule) to trigger on `ReplaceRoute` API calls where `requestParameters.destinationCidrBlock` does not match the expected VIP CIDRs. Alert the security team on any unexpected route modification.
+3. **AWS Config custom rule.** Deploy a custom AWS Config rule that evaluates the route table after each change and flags any route entry whose destination does not match the approved VIP address list.
+4. **VPC Flow Logs analysis.** Enable VPC Flow Logs on all subnets and configure anomaly detection to identify unexpected traffic patterns that could indicate route manipulation.
+
+**Priority:** Pre-go-live.
+
+---
+
 ## 5. Risk Matrix
 
 | Finding ID | Title | Severity | Likelihood | Impact | Overall Rating |
@@ -644,6 +676,7 @@ Verify that the deployed AudioCodes firmware version (7.4.500+) supports TLS 1.3
 | F-CS-014 | RADIUS Local Cache Timeout | Low | Medium | Low | Low |
 | F-CS-015 | No Voice IR Procedure | Medium | Medium | High | Medium |
 | F-CS-016 | TLS 1.2 Only -- No TLS 1.3 | Low | Low | Low | Low |
+| F-CS-017 | SBC ReplaceRoute IAM Lacks Route-Entry Granularity | Medium | Low | High | Medium |
 
 ---
 
@@ -666,6 +699,7 @@ The following table identifies areas where the guide deviates from established s
 | **Incident Response** | NIST IR-1; ISM-0576 | Not addressed | No voice-specific incident response procedure |
 | **Network Segmentation** | NIST SC-7; CIS AWS 5.x | Security groups defined (S5) | Cross-region All/All rules undermine segmentation |
 | **TLS Best Practice** | NIST SC-13; RFC 8446 | TLS 1.3 recommended but not configured (S8/S12) | TLS 1.2 only in implementation |
+| **Route Table Security** | NIST AC-6; CIS AWS 5.x | Route table ARN + tag condition (S20) | No route-entry-level IAM restriction; compensating detective controls required |
 | **Protocol Security** | RFC 6614 (RadSec); NIST SC-8 | RADIUS over UDP acknowledged (S10.4) | MD5-based shared secret, no TLS for RADIUS |
 
 ---
@@ -696,14 +730,15 @@ The following table identifies areas where the guide deviates from established s
 | R-13 | Replace All/All cross-region security group rules with specific protocol/port rules | F-CS-012 |
 | R-14 | Enable EBS encryption by default at the account level using customer-managed KMS key | F-CS-013 |
 | R-15 | Develop voice infrastructure security incident response procedure | F-CS-015 |
+| R-16 | Isolate VIP routes in a dedicated route table; deploy CloudTrail alerting, AWS Config rule, and VPC Flow Logs for route manipulation detection | F-CS-017 |
 
 ### Post-Deployment (Next Maintenance Window)
 
 | ID | Recommendation | Finding |
 |----|---------------|---------|
-| R-16 | Evaluate RadSec (RADIUS over TLS) for SBC-to-ISE communication | F-CS-009 |
-| R-17 | Reduce RADIUS local cache timeout to 300 seconds, disable reset timer | F-CS-014 |
-| R-18 | Upgrade TLS Context to TLS 1.3 when AudioCodes firmware supports it | F-CS-016 |
+| R-17 | Evaluate RadSec (RADIUS over TLS) for SBC-to-ISE communication | F-CS-009 |
+| R-18 | Reduce RADIUS local cache timeout to 300 seconds, disable reset timer | F-CS-014 |
+| R-19 | Upgrade TLS Context to TLS 1.3 when AudioCodes firmware supports it | F-CS-016 |
 
 ---
 
@@ -737,6 +772,10 @@ The following table identifies areas where the guide deviates from established s
 | AI-24 | Evaluate RadSec for RADIUS transport security | Security / Voice Engineering | Low | Post Go-Live (Q3 2026) | Open |
 | AI-25 | Reduce RADIUS cache timeout and disable reset timer | Voice Engineering | Low | Post Go-Live (Q3 2026) | Open |
 | AI-26 | Upgrade TLS Context to TLS 1.3 when firmware supports it | Voice Engineering | Low | Post Go-Live (Q3/Q4 2026) | Open |
+| AI-27 | Create dedicated VIP-only route table for SBC IAM ReplaceRoute scope | Cloud Platform / Network | Medium | Before Prod Go-Live | Open |
+| AI-28 | Deploy CloudTrail alerting for unexpected ReplaceRoute destination CIDRs | Cloud Security | Medium | Before Prod Go-Live | Open |
+| AI-29 | Deploy AWS Config custom rule to validate route table entries against approved VIP list | Cloud Security | Medium | Before Prod Go-Live | Open |
+| AI-30 | Enable VPC Flow Logs with anomaly detection for route manipulation indicators | Cloud Security | Medium | Before Prod Go-Live | Open |
 
 ---
 
