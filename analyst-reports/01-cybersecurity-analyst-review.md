@@ -648,8 +648,40 @@ A compromised SBC could inject arbitrary routes into the VPC route table, potent
 Implement the following compensating controls since IAM cannot restrict `ReplaceRoute` to specific route entries:
 
 1. **Dedicated VIP route table.** Place only VIP routes (`10.x.x.x/32` entries) in the route table referenced by the SBC IAM policy. If the route table contains no non-VIP routes, the blast radius of a compromised `ReplaceRoute` call is limited to VIP entries only.
-2. **CloudTrail alerting.** Configure a CloudWatch Events rule (or EventBridge rule) to trigger on `ReplaceRoute` API calls where `requestParameters.destinationCidrBlock` does not match the expected VIP CIDRs. Alert the security team on any unexpected route modification.
-3. **AWS Config custom rule.** Deploy a custom AWS Config rule that evaluates the route table after each change and flags any route entry whose destination does not match the approved VIP address list.
+
+2. **EventBridge + Lambda automated containment.** Deploy a Lambda function triggered by EventBridge on CloudTrail `ReplaceRoute` events to provide route-entry-level validation that IAM cannot enforce. The Lambda acts as a retrospective security gate with automated containment capabilities:
+
+   **Trigger:** EventBridge rule matching `source: aws.ec2`, `detail-type: AWS API Call via CloudTrail`, `detail.eventName: ReplaceRoute`, filtered to the SBC route table.
+
+   **Validation logic:**
+   - Check `requestParameters.destinationCidrBlock` against an allowlist of known VIP CIDRs (e.g., `10.x.x.x/32`)
+   - Check the target `networkInterfaceId` against registered SBC ENI IDs
+   - Check `userIdentity.sessionContext.sessionIssuer.arn` matches a known SBC IAM role
+
+   **Response on invalid route change (automated containment):**
+   1. **Revert** — call `ec2:ReplaceRoute` to restore the route to its last known-good target ENI (maintained in a DynamoDB table or SSM Parameter Store)
+   2. **Revoke** — disassociate the IAM instance profile from the compromised SBC instance (`ec2:DisassociateIamInstanceProfile`), immediately revoking all API permissions
+   3. **Quarantine** — replace the instance's security groups with a pre-built quarantine security group that denies all traffic except management access from a jump host CIDR
+   4. **Alert** — publish to an SNS topic for security team notification with full event context (caller identity, route change attempted, containment actions taken)
+   5. **Log** — write a structured incident record to CloudWatch Logs for forensic review
+
+   **Response on valid route change:** No action; log the event for audit trail.
+
+   **Lambda IAM permissions required:**
+   - `ec2:ReplaceRoute` on the VIP route table (to revert)
+   - `ec2:DisassociateIamInstanceProfile` on SBC instances (to revoke)
+   - `ec2:ModifyInstanceAttribute` on SBC instances (to quarantine via SG swap)
+   - `ec2:DescribeInstances`, `ec2:DescribeRouteTables` (to query state)
+   - `sns:Publish` on the security alerts topic
+   - `ssm:GetParameter` for known-good route state lookup
+   - `logs:CreateLogStream`, `logs:PutLogEvents` for incident logging
+
+   **Latency:** EventBridge delivers CloudTrail events within approximately 60-90 seconds of the API call. The window of exposure for a malicious route is bounded by this delivery latency plus Lambda execution time (~1-2 seconds). This is acceptable for a compensating control where the primary control (IAM) already restricts scope to a single route table.
+
+   **Note:** The AudioCodes SBC firmware calls `ec2:ReplaceRoute` directly during HA failover — this is proprietary behaviour that cannot be modified to call Lambda as an intermediary. The EventBridge + Lambda pattern therefore operates as a reactive validator rather than a preventive proxy, but achieves the same security outcome with minimal exposure window.
+
+3. **AWS Config custom rule.** Deploy a custom AWS Config rule that evaluates the route table after each change and flags any route entry whose destination does not match the approved VIP address list. This provides a secondary validation layer independent of the EventBridge pipeline.
+
 4. **VPC Flow Logs analysis.** Enable VPC Flow Logs on all subnets and configure anomaly detection to identify unexpected traffic patterns that could indicate route manipulation.
 
 **Priority:** Pre-go-live.
@@ -730,7 +762,7 @@ The following table identifies areas where the guide deviates from established s
 | R-13 | Replace All/All cross-region security group rules with specific protocol/port rules | F-CS-012 |
 | R-14 | Enable EBS encryption by default at the account level using customer-managed KMS key | F-CS-013 |
 | R-15 | Develop voice infrastructure security incident response procedure | F-CS-015 |
-| R-16 | Isolate VIP routes in a dedicated route table; deploy CloudTrail alerting, AWS Config rule, and VPC Flow Logs for route manipulation detection | F-CS-017 |
+| R-16 | Isolate VIP routes in a dedicated route table; deploy EventBridge + Lambda containment function with automated revert, IAM revocation, SG quarantine, and SNS alerting for unauthorised route changes | F-CS-017 |
 
 ### Post-Deployment (Next Maintenance Window)
 
@@ -773,9 +805,11 @@ The following table identifies areas where the guide deviates from established s
 | AI-25 | Reduce RADIUS cache timeout and disable reset timer | Voice Engineering | Low | Post Go-Live (Q3 2026) | Open |
 | AI-26 | Upgrade TLS Context to TLS 1.3 when firmware supports it | Voice Engineering | Low | Post Go-Live (Q3/Q4 2026) | Open |
 | AI-27 | Create dedicated VIP-only route table for SBC IAM ReplaceRoute scope | Cloud Platform / Network | Medium | Before Prod Go-Live | Open |
-| AI-28 | Deploy CloudTrail alerting for unexpected ReplaceRoute destination CIDRs | Cloud Security | Medium | Before Prod Go-Live | Open |
-| AI-29 | Deploy AWS Config custom rule to validate route table entries against approved VIP list | Cloud Security | Medium | Before Prod Go-Live | Open |
-| AI-30 | Enable VPC Flow Logs with anomaly detection for route manipulation indicators | Cloud Security | Medium | Before Prod Go-Live | Open |
+| AI-28 | Deploy EventBridge + Lambda automated containment function for ReplaceRoute validation (revert, revoke, quarantine, alert) | Cloud Security / Voice Engineering | Medium | Before Prod Go-Live | Open |
+| AI-29 | Create quarantine security group for SBC isolation (management-only access) | Cloud Security | Medium | Before Prod Go-Live | Open |
+| AI-30 | Populate known-good VIP route state in SSM Parameter Store or DynamoDB | Cloud Platform / Voice Engineering | Medium | Before Prod Go-Live | Open |
+| AI-31 | Deploy AWS Config custom rule to validate route table entries against approved VIP list | Cloud Security | Medium | Before Prod Go-Live | Open |
+| AI-32 | Enable VPC Flow Logs with anomaly detection for route manipulation indicators | Cloud Security | Medium | Before Prod Go-Live | Open |
 
 ---
 
