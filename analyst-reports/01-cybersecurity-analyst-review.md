@@ -671,12 +671,12 @@ Implement the following compensating controls since IAM cannot restrict `Replace
       - Inbound: SSH (TCP 22) from jump host CIDR only
       - Outbound: none
       - All voice, SIP, RTP, management, and HA traffic immediately severed
-   4. **Stop instance** — call `ec2:StopInstances` on the compromised SBC to halt all processing. The healthy SBC in the HA pair is already serving traffic (the route was reverted in step 1)
-   5. **Alert (P1)** — publish to an SNS topic configured with:
+      - Instance remains running for forensic investigation; security team decides whether to stop or terminate
+   4. **Alert (P1)** — publish to an SNS topic configured with:
       - Security team email distribution list
       - PagerDuty/Opsgenie integration for immediate on-call paging
       - Message includes: caller instance ID, attempted route change, source IP, containment actions taken, timestamp
-   6. **Log** — write a structured JSON incident record to a dedicated CloudWatch Log Group (`/aws/lambda/sbc-route-containment`) with 365-day retention for forensic and compliance review
+   5. **Log** — write a structured JSON incident record to a dedicated CloudWatch Log Group (`/aws/lambda/sbc-route-containment`) with 365-day retention for forensic and compliance review
 
    **Scheduled canary (independent validation layer):**
    - A second Lambda function runs on an **EventBridge schedule every 60 seconds**
@@ -693,15 +693,14 @@ Implement the following compensating controls since IAM cannot restrict `Replace
    - `ec2:ReplaceRoute` on the VIP route table ARN (to revert)
    - `ec2:DisassociateIamInstanceProfile` on SBC instances (to revoke)
    - `ec2:ModifyInstanceAttribute` on SBC instances (to swap security groups)
-   - `ec2:StopInstances` on SBC instances (to halt compromised instance)
    - `ec2:DescribeInstances`, `ec2:DescribeRouteTables`, `ec2:DescribeIamInstanceProfileAssociations` (to query state)
    - `sns:Publish` on the security alerts topic
    - `ssm:GetParameter`, `ssm:PutParameter` for VIP state management
    - `logs:CreateLogStream`, `logs:PutLogEvents` for incident logging
 
-   **Exposure window:** EventBridge delivers CloudTrail management events in **5-15 seconds**. With provisioned concurrency eliminating cold starts, total time from malicious API call to full containment (route reverted, IAM revoked, instance quarantined and stopped) is approximately **7-18 seconds**. The 60-second canary provides a backstop if the event-driven path fails.
+   **Exposure window:** EventBridge delivers CloudTrail management events in **5-15 seconds**. With provisioned concurrency eliminating cold starts, total time from malicious API call to full containment (route reverted, IAM revoked, instance quarantined) is approximately **7-18 seconds**. The 60-second canary provides a backstop if the event-driven path fails.
 
-   **Note:** The AudioCodes SBC firmware calls `ec2:ReplaceRoute` directly during HA failover — this is proprietary behaviour that cannot be modified to call Lambda as an intermediary. The EventBridge + Lambda pattern therefore operates as a reactive containment gate rather than a preventive proxy. The aggressive posture (automatic stop + quarantine with no human gate) is justified because: (a) a legitimate SBC never modifies non-VIP routes, so any violation is definitively malicious or a severe misconfiguration, and (b) the healthy SBC in the HA pair continues serving traffic after route reversion.
+   **Note:** The AudioCodes SBC firmware calls `ec2:ReplaceRoute` directly during HA failover — this is proprietary behaviour that cannot be modified to call Lambda as an intermediary. The EventBridge + Lambda pattern therefore operates as a reactive containment gate rather than a preventive proxy. The aggressive posture (automatic quarantine with no human gate) is justified because: (a) a legitimate SBC never modifies non-VIP routes, so any violation is definitively malicious or a severe misconfiguration, and (b) the healthy SBC in the HA pair continues serving traffic after route reversion. The compromised instance is left running in an isolated state for forensic analysis — the security team retains the decision to stop or terminate.
 
 3. **AWS Config custom rule.** Deploy a custom AWS Config rule that evaluates the route table on every configuration change and flags any route entry whose destination does not match the approved VIP address list. This provides a tertiary validation layer independent of both the EventBridge pipeline and the scheduled canary.
 
@@ -828,7 +827,7 @@ The following table identifies areas where the guide deviates from established s
 | AI-25 | Reduce RADIUS cache timeout and disable reset timer | Voice Engineering | Low | Post Go-Live (Q3 2026) | Open |
 | AI-26 | Upgrade TLS Context to TLS 1.3 when firmware supports it | Voice Engineering | Low | Post Go-Live (Q3/Q4 2026) | Open |
 | AI-27 | Create dedicated VIP-only route table for SBC IAM ReplaceRoute scope | Cloud Platform / Network | Medium | Before Prod Go-Live | Open |
-| AI-28 | Deploy EventBridge + Lambda containment function with provisioned concurrency (revert, revoke, quarantine, stop, P1 alert) | Cloud Security / Voice Engineering | Medium | Before Prod Go-Live | Open |
+| AI-28 | Deploy EventBridge + Lambda containment function with provisioned concurrency (revert, revoke, quarantine, P1 alert) | Cloud Security / Voice Engineering | Medium | Before Prod Go-Live | Open |
 | AI-29 | Deploy 60-second scheduled canary Lambda for independent route table validation | Cloud Security | Medium | Before Prod Go-Live | Open |
 | AI-30 | Create quarantine security group (SSH from jump host only, no outbound) | Cloud Security | Medium | Before Prod Go-Live | Open |
 | AI-31 | Populate known-good VIP route state and SBC ENI allowlist in SSM Parameter Store | Cloud Platform / Voice Engineering | Medium | Before Prod Go-Live | Open |
@@ -889,6 +888,197 @@ The following table identifies areas where the guide deviates from established s
 | Microsoft Teams Direct Routing Documentation | Current | Microsoft-specific SBC security requirements |
 | AudioCodes Security Guidelines | Per product release | Vendor hardening guidance |
 | AWS Well-Architected Framework -- Security Pillar | 2024 | AWS security design principles |
+
+---
+
+## 11. Appendix: F-CS-017 — ReplaceRoute Containment Architecture
+
+### Summary
+
+AWS IAM cannot restrict `ec2:ReplaceRoute` to specific route entries within a route table — there are no condition keys for destination CIDR or target ENI. The SBC IAM policy is already at maximum IAM granularity (specific route table ARN + environment tag condition). To close this gap, a multi-layered compensating control architecture is recommended using EventBridge, Lambda, and AWS Config to provide the route-entry-level enforcement that IAM cannot deliver natively.
+
+The architecture uses a **deny-by-default, automated containment** model. When an SBC calls `ec2:ReplaceRoute`, the event is captured by CloudTrail and delivered to EventBridge in near-real-time (5-15 seconds). A Lambda function with provisioned concurrency validates the route change against a strict allowlist of approved VIP CIDRs and SBC ENI IDs stored in SSM Parameter Store. If the change is legitimate (e.g., a normal HA failover), the Lambda updates the known-good state and logs the event. If any validation check fails, the Lambda executes a fully automated containment sequence: reverting the route, revoking the instance's IAM permissions, quarantining it behind a restrictive security group, and raising a P1 alert. A 60-second scheduled canary Lambda provides an independent backstop by continuously polling the route table state.
+
+This pattern cannot operate as a preventive proxy because the AudioCodes SBC firmware calls the EC2 API directly during HA failover — this is proprietary behaviour embedded in the vendor software. The reactive approach achieves equivalent security posture with a bounded exposure window of approximately 7-18 seconds.
+
+The compromised instance is intentionally left running in quarantine (no `ec2:StopInstances`) to preserve volatile memory, process state, and network connection metadata for forensic investigation. The security team retains the decision to stop, terminate, or snapshot the instance based on incident response procedures.
+
+### Architecture Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                     NORMAL HA FAILOVER (VALID PATH)                        │
+│                                                                            │
+│  ┌──────────┐    ec2:ReplaceRoute     ┌───────────┐                        │
+│  │ Standby  │ ──────────────────────► │ EC2 API   │                        │
+│  │ SBC      │  (VIP CIDR to own ENI)  │           │                        │
+│  │ (becomes │                         └─────┬─────┘                        │
+│  │  Active) │                               │                              │
+│  └──────────┘                               │ CloudTrail                   │
+│                                             │ management event             │
+│                                             ▼                              │
+│                                     ┌───────────────┐                      │
+│                                     │  EventBridge   │                     │
+│                                     │  Rule          │                     │
+│                                     │  (ReplaceRoute │                     │
+│                                     │   + RT filter) │                     │
+│                                     └───────┬───────┘                      │
+│                                             │ 5-15 seconds                 │
+│                                             ▼                              │
+│                              ┌──────────────────────────┐                  │
+│                              │  Containment Lambda       │                 │
+│                              │  (provisioned concurrency)│                 │
+│                              └──────────┬───────────────┘                  │
+│                                         │                                  │
+│                                         ▼                                  │
+│                              ┌──────────────────────┐                      │
+│                              │ VALIDATE against     │                      │
+│                              │ SSM Parameter Store:  │                      │
+│                              │  • VIP CIDR allowlist │                      │
+│                              │  • SBC ENI allowlist  │                      │
+│                              │  • SBC IAM role ARN   │                      │
+│                              │  • HA subnet CIDR     │                      │
+│                              └──────────┬───────────┘                      │
+│                                         │                                  │
+│                                    ┌────┴────┐                             │
+│                                    │  VALID? │                             │
+│                                    └────┬────┘                             │
+│                                         │ YES                              │
+│                                         ▼                                  │
+│                              ┌──────────────────────┐                      │
+│                              │ Update known-good     │                     │
+│                              │ state in SSM          │                     │
+│                              │ Log for audit trail   │                     │
+│                              └──────────────────────┘                      │
+│                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                  UNAUTHORISED ROUTE CHANGE (CONTAINMENT PATH)              │
+│                                                                            │
+│  ┌──────────┐    ec2:ReplaceRoute     ┌───────────┐                        │
+│  │Compromis-│ ──────────────────────► │ EC2 API   │                        │
+│  │ed SBC    │  (non-VIP CIDR or       │           │                        │
+│  │Instance  │   unknown target ENI)   └─────┬─────┘                        │
+│  └──────────┘                               │                              │
+│       ▲                                     │ CloudTrail                   │
+│       │                                     │ management event             │
+│       │                                     ▼                              │
+│       │                             ┌───────────────┐                      │
+│       │                             │  EventBridge   │                     │
+│       │                             │  Rule          │                     │
+│       │                             └───────┬───────┘                      │
+│       │                                     │ 5-15 seconds                 │
+│       │                                     ▼                              │
+│       │                      ┌──────────────────────────┐                  │
+│       │                      │  Containment Lambda       │                 │
+│       │                      └──────────┬───────────────┘                  │
+│       │                                 │                                  │
+│       │                                 ▼                                  │
+│       │                      ┌──────────────────────┐                      │
+│       │                      │ VALIDATE ──► FAILED  │                      │
+│       │                      └──────────┬───────────┘                      │
+│       │                                 │                                  │
+│       │            ┌────────────────────┼────────────────────┐             │
+│       │            │                    │                    │             │
+│       │            ▼                    ▼                    ▼             │
+│       │  ┌─────────────────┐ ┌─────────────────┐ ┌─────────────────┐     │
+│       │  │ 1. REVERT       │ │ 2. REVOKE       │ │ 3. QUARANTINE   │     │
+│       │  │                 │ │                  │ │                 │     │
+│       │  │ ReplaceRoute    │ │ Disassociate IAM │ │ Swap all SGs to │     │
+│       │  │ back to last    │ │ instance profile │ │ quarantine SG:  │     │
+│       │  │ known-good ENI  │ │ from instance    │ │  IN: SSH from   │     │
+│       │  │ (from SSM)      │ │                  │ │      jump host  │     │
+│       │  │                 │ │ All AWS API      │ │  OUT: deny all  │     │
+│       └──│ Route restored  │ │ access revoked   │ │                 │     │
+│          │ in ~1 second    │ │ immediately      │ │ Instance stays  │     │
+│          └─────────────────┘ └─────────────────┘ │ running for     │     │
+│                                                  │ forensics       │     │
+│                                                  └─────────────────┘     │
+│                                                                          │
+│                           ┌─────────────────────────┐                    │
+│                           │ 4. ALERT (P1)            │                    │
+│                           │                          │                    │
+│                           │ SNS ──► Email + PagerDuty│                    │
+│                           │                          │                    │
+│                           │ Payload:                 │                    │
+│                           │  • Instance ID           │                    │
+│                           │  • Attempted CIDR        │                    │
+│                           │  • Source IP              │                    │
+│                           │  • Actions taken          │                    │
+│                           └─────────────────────────┘                    │
+│                                                                          │
+│                           ┌─────────────────────────┐                    │
+│                           │ 5. LOG                   │                    │
+│                           │                          │                    │
+│                           │ CloudWatch Log Group     │                    │
+│                           │ 365-day retention        │                    │
+│                           │ Structured JSON          │                    │
+│                           └─────────────────────────┘                    │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    SCHEDULED CANARY (INDEPENDENT BACKSTOP)                  │
+│                                                                            │
+│  ┌───────────────┐     Every 60s      ┌────────────────────┐               │
+│  │  EventBridge   │ ────────────────► │  Canary Lambda      │              │
+│  │  Schedule Rule │                   │                     │              │
+│  └───────────────┘                    │  DescribeRouteTables│              │
+│                                       │  Compare all routes │              │
+│                                       │  against VIP        │              │
+│                                       │  allowlist           │              │
+│                                       └──────────┬──────────┘              │
+│                                                  │                         │
+│                                             ┌────┴────┐                    │
+│                                             │ VALID?  │                    │
+│                                             └────┬────┘                    │
+│                                           YES/   \NO                       │
+│                                           /       \                        │
+│                                          ▼         ▼                       │
+│                                     No action   Trigger same               │
+│                                                 containment                │
+│                                                 sequence                   │
+│                                                 (steps 1-5)               │
+│                                                                            │
+│  Catches: delayed EventBridge delivery, CloudTrail disruption,             │
+│           route changes via console/CLI from unexpected identities          │
+└─────────────────────────────────────────────────────────────────────────────┘
+
+
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                        COMPONENT SUMMARY                                   │
+│                                                                            │
+│  Component                    Purpose                        Cost          │
+│  ─────────────────────────── ─────────────────────────────── ────────────  │
+│  EventBridge Rule (event)     Trigger on ReplaceRoute         Free tier    │
+│  EventBridge Rule (schedule)  60s canary trigger              Free tier    │
+│  Containment Lambda           Validate + contain              ~$1/month   │
+│  Canary Lambda                Independent route polling       ~$1/month   │
+│  Provisioned Concurrency (1)  Eliminate cold starts           ~$3/month   │
+│  SSM Parameter Store          VIP/ENI allowlist + state       Free tier    │
+│  SNS Topic                    P1 alerting                     Free tier    │
+│  CloudWatch Log Group         Incident records (365 days)     ~$1/month   │
+│  Quarantine Security Group    Isolation (SSH-only inbound)    Free        │
+│  ─────────────────────────── ─────────────────────────────── ────────────  │
+│  Estimated total                                              ~$6/month   │
+│                                                                            │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Key Design Decisions
+
+| Decision | Rationale |
+|----------|-----------|
+| **Reactive, not preventive** | AudioCodes firmware calls EC2 API directly; cannot be intercepted or proxied through Lambda |
+| **Deny by default** | All four validation checks (CIDR, ENI, IAM role, source IP) must pass; any single failure triggers containment |
+| **No instance stop** | Compromised instance left running in quarantine to preserve volatile memory, process state, and network metadata for forensic investigation |
+| **Provisioned concurrency** | Eliminates ~800ms cold start; total containment completes in 7-18 seconds from API call |
+| **Dual detection paths** | Event-driven (5-15s) + scheduled canary (60s) ensures no single point of failure in the detection pipeline |
+| **SSM Parameter Store** | Stores both the allowlist (static config) and known-good state (updated on valid failovers); avoids DynamoDB cost for low-throughput use case |
+| **Quarantine SG: SSH-only inbound, no outbound** | Security team can SSH in for investigation; instance cannot exfiltrate data or communicate with any other resource |
 
 ---
 
