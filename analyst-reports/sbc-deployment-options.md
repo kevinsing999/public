@@ -44,7 +44,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 | **Security controls** | 4-layer compensating control architecture (see notes) |
 | **Exposure window** | ~7-18 seconds from malicious API call to full automated containment |
 | **Guardrail cost** | ~$6/month per region |
-| **Licensing** | 2x SBC licence per region |
+| **Licensing** | 1x SBC session/feature licence per region (single logical SBC) + 2x base VM licences |
 | **Infrastructure** | 2x SBC instances + 1x Stack Manager (t3.medium) per environment |
 
 > **Notes - Compensating Controls (4 layers):**
@@ -129,7 +129,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 | **Recovery time** | Seconds (automatic) | Minutes-hours, potentially up to a day (manual - see notes) | Seconds-minutes (DNS/SIP) | Seconds (automatic) |
 | **Security risk** | 7-18s window, 4-layer defence | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present |
 | **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) |
-| **Licensing** | 2x SBC/region + ~$6/mo | 1x SBC/region | 2x SBC/region | Appliance licence |
+| **Licensing** | 1x session/feature + 2x base VM + ~$6/mo | 1x SBC/region | 2x full SBC/region | Appliance licence |
 | **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Can convert directly to HA | Locked to on-premises |
 | **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support |
 | **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood |
