@@ -4,7 +4,6 @@
 
 **Document Version:** 2.6
 **Date:** 13 February 2026
-**Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
 
 ---

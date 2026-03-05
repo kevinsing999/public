@@ -9,7 +9,6 @@ title: AudioCodes SBC - Unified Deployment & Configuration Guide
 
 **Document Version:** 2.2
 **Date:** February 2026
-**Classification:** Public
 **Related Documents:** AudioCodes AWS Deployment Guide v2.0, AudioCodes Detailed Design Document v1.0
 
 ---

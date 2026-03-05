@@ -3,7 +3,6 @@
 | Field | Detail |
 |-------|--------|
 | **Date** | 5 March 2026 |
-| **Classification** | Internal - Restricted |
 | **Audience** | IT Manager, Cybersecurity, Cloud Platform, Voice Engineering |
 | **Source** | AudioCodes SBC - Unified Deployment & Configuration Guide v2.6 |
 | **Purpose** | Present four SBC deployment options with recommendation |

@@ -9,7 +9,6 @@
 | **Document Date** | 13 February 2026 |
 | **Review Date** | 4 March 2026 |
 | **Reviewer Role** | Senior Cybersecurity Analyst / Security Architect |
-| **Classification** | Internal - Restricted |
 | **Finding ID Prefix** | F-CS |
 
 ---
@@ -1109,4 +1108,3 @@ The compromised instance is intentionally left running in quarantine (no `ec2:St
 
 *Prepared by: Senior Cybersecurity Analyst / Security Architect*
 *Review Date: 4 March 2026*
-*Document Classification: Internal - Restricted*
