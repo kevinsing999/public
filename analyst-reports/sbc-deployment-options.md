@@ -128,7 +128,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 | **HA capability** | Full 1+1 Active/Standby | None | External failover (DNS/SIP) | Full HA (VRRP/native) |
 | **Call survivability** | Active calls survive | All calls drop | Active calls drop | Active calls survive |
 | **Recovery time** | Seconds (automatic) | Minutes-hours (manual) | Seconds-minutes (DNS/SIP) | Seconds (automatic) |
-| **Security risk** | 7-18s window, 4-layer defence | Zero IAM risk | Zero IAM risk | Shifts to physical domain |
+| **Security risk** | 7-18s window, 4-layer defence | Zero IAM risk | Zero IAM risk | Noted risk not present |
 | **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) |
 | **Licensing** | 2x SBC/region + ~$6/mo | 1x SBC/region | 2x SBC/region | Appliance licence |
 | **Future flexibility** | Already at target state | **Total rebuild for HA** | Can convert directly to HA | Locked to on-premises |
@@ -162,13 +162,13 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 
 Option 1 is the recommended path. It delivers the target-state HA architecture from day one, avoids any future rebuild risk, and provides seamless failover with call survivability. The 7-18 second exposure window is bounded by a 4-layer automated defence that reverts, revokes, quarantines, and alerts without human intervention. The guardrail infrastructure costs ~$6/month per region.
 
-### Fallback: Option 3 - 2x Standalone SBCs
+### Fallback: Option 4 - On-Premises HA
 
-If cybersecurity determines that the compensating controls in Option 1 are insufficient and `ec2:ReplaceRoute` must be eliminated entirely, Option 3 is the recommended fallback. It removes all route table and EIP IAM permissions while still providing resilience through DNS/SIP-based failover. Active calls will drop on primary failure, but new calls route to the secondary within seconds to minutes. Importantly, Option 3 preserves a direct upgrade path to full HA - there is no programmatic route table manipulation in the standalone configuration, so conversion to an HA pair does not require a total rebuild.
+If cybersecurity determines that the compensating controls in Option 1 are insufficient and `ec2:ReplaceRoute` must be eliminated entirely, Option 4 is the recommended fallback. It delivers all of the desired functionality - full HA, call survivability, and the noted IAM risk is simply not present - using a proven physical appliance with traditional VRRP/native HA. The trade-off is strategic: it depends on how important the cloud-first commitment is to the organisation. If cloud-first is a firm direction, Option 4 is off the table. If there is flexibility on that position, it eliminates the concern entirely without compromise on availability or call survivability.
 
-### Also Worth Considering: Option 4 - On-Premises HA
+### Also Worth Considering: Option 3 - 2x Standalone SBCs
 
-Option 4 delivers all of the desired functionality - full HA, call survivability, and zero cloud IAM concerns - using a proven physical appliance with traditional VRRP/native HA. The trade-off is strategic: it depends on how important the cloud-first commitment is to the organisation. If cloud-first is a firm direction, Option 4 is off the table. If there is flexibility on that position, it eliminates the IAM concern entirely without any of the trade-offs of Options 2 or 3.
+Option 3 removes all route table and EIP IAM permissions while still providing resilience through DNS/SIP-based failover. Active calls will drop on primary failure, but new calls route to the secondary within seconds to minutes. Option 3 preserves a direct upgrade path to full HA. However, running two independent SBCs introduces configuration drift risk - each instance maintains its own configuration independently, and keeping them in sync is an ongoing operational burden.
 
 ### Not Recommended: Option 2 - Standalone (No HA)
 
