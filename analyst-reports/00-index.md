@@ -18,6 +18,7 @@
 | 04 | Solution Architect Review | Senior Solution Architect | 15 | Adequate with Reservations | [04-solution-architect-review.md](04-solution-architect-review.md) |
 | 05 | Consultant Operational Readiness | Senior Technology Consultant | 15 | Not Ready for Deployment | [05-consultant-operational-readiness.md](05-consultant-operational-readiness.md) |
 | — | Cross-Cutting Findings | All reviewers | 10 themes | — | [cross-cutting-findings.md](cross-cutting-findings.md) |
+| — | SBC Deployment Options — Decision Pack | Decision support (F-CS-017) | 4 options | Decision required | [sbc-deployment-options.md](sbc-deployment-options.md) |
 
 ---
 
@@ -101,9 +102,10 @@ analyst-reports/
 ├── 03-sbc-engineer-review.md                ← 15 findings (F-SB-001 to F-SB-015)
 ├── 04-solution-architect-review.md          ← 15 findings (F-SA-001 to F-SA-015)
 ├── 05-consultant-operational-readiness.md   ← 15 findings (F-CO-001 to F-CO-015)
-└── cross-cutting-findings.md               ← 10 cross-cutting themes (CC-01 to CC-10)
+├── cross-cutting-findings.md               ← 10 cross-cutting themes (CC-01 to CC-10)
+└── sbc-deployment-options.md              ← SBC HA deployment options decision pack (F-CS-017)
 ```
 
 ---
 
-*Generated 4 March 2026*
+*Updated 5 March 2026*
