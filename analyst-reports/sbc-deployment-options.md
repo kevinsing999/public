@@ -5,7 +5,7 @@
 | **Date** | 5 March 2026 |
 | **Audience** | IT Manager, Cybersecurity, Cloud Platform, Voice Engineering |
 | **Source** | AudioCodes SBC - Unified Deployment & Configuration Guide v2.6 |
-| **Purpose** | Present four SBC deployment options with recommendation |
+| **Purpose** | Present five SBC deployment options with recommendation |
 
 ---
 
@@ -32,7 +32,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 
 ---
 
-## 2. The Four Options
+## 2. The Five Options
 
 ### Option 1 - HA with Retrospective Guardrails
 
@@ -118,27 +118,51 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 > - Ongoing hardware maintenance and lifecycle management (patching, warranty, end-of-life).
 > - Security concerns shift entirely from IAM/cloud to physical access controls and network segmentation.
 
+### Option 5 - On-Premises Virtualised SBC in HA
+
+| Aspect | Detail |
+|--------|--------|
+| **Architecture** | AudioCodes Mediant VE (Virtual Edition) deployed on existing on-premises hypervisors in HA |
+| **Failover** | Traditional HA - VRRP/native AudioCodes HA on hypervisor; active calls survive |
+| **IAM permissions** | N/A - no cloud IAM involved |
+| **Security controls** | Existing on-premises security controls, hypervisor access controls, network ACLs |
+| **Call survivability** | Active calls survive (session state synchronised) |
+| **Licensing** | Mediant VE software licence (session/feature + base VM) |
+| **Infrastructure** | 2x VMs on existing hypervisors - no new hardware procurement |
+
+> **Notes:**
+> - Same AudioCodes Mediant VE software as the AWS deployment but hosted on existing on-premises hypervisors (VMware, Hyper-V, KVM).
+> - **No hardware procurement lead time** - uses existing hypervisor capacity, significantly faster to deploy than Option 4.
+> - No new rack space, power, or cooling required - leverages existing data centre infrastructure.
+> - Full AudioCodes HA support - same HA mechanism as Option 4 but virtualised.
+> - HA failover uses standard networking (VRRP or hypervisor-level IP mobility) - no cloud API dependency.
+> - Noted IAM risk not present - no cloud IAM permissions involved in failover.
+> - **Against cloud-first strategy** - same strategic trade-off as Option 4, but lower capital cost and faster deployment.
+> - Dependent on existing hypervisor capacity and availability in the required data centre locations.
+> - Ongoing management within the on-premises virtualisation estate (patching, snapshots, hypervisor lifecycle).
+> - Connectivity to AWS (Direct Connect, VPN, or internet) required for Teams SIP signalling if Teams integration terminates in AWS.
+
 ---
 
 ## 3. Comparison Matrix
 
-| Category | Option 1: HA + Guardrails | Option 2: Standalone | Option 3: 2x Standalone | Option 4: On-Premises |
-|----------|--------------------------|---------------------|------------------------|----------------------|
-| **HA capability** | Full 1+1 Active/Standby | None | External failover (DNS/SIP) | Full HA (VRRP/native) |
-| **Call survivability** | Active calls survive | All calls drop | Active calls drop | Active calls survive |
-| **Recovery time** | Seconds (automatic) | Minutes-hours, potentially up to a day (manual - see notes) | Seconds-minutes (DNS/SIP) | Seconds (automatic) |
-| **Security risk** | 7-18s window, 4-layer defence | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present |
-| **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) |
-| **Licensing** | 1x session/feature + 2x base VM + ~$6/mo | 1x SBC/region | 2x full SBC/region | Appliance licence |
-| **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Can convert directly to HA | Locked to on-premises |
-| **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support |
-| **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood |
-| **Cloud-first aligned** | Yes | Yes | Yes | No |
-| **Timeline to deploy** | Moderate - HA build + guardrail stack | Fastest - simplest architecture | Moderate - 2x SBC config + provider coordination | Slowest - hardware procurement + data centre logistics |
+| Category | Option 1: HA + Guardrails | Option 2: Standalone | Option 3: 2x Standalone | Option 4: On-Prem Physical | Option 5: On-Prem Virtualised |
+|----------|--------------------------|---------------------|------------------------|----------------------|-------------------------------|
+| **HA capability** | Full 1+1 Active/Standby | None | External failover (DNS/SIP) | Full HA (VRRP/native) | Full HA (VRRP/native) |
+| **Call survivability** | Active calls survive | All calls drop | Active calls drop | Active calls survive | Active calls survive |
+| **Recovery time** | Seconds (automatic) | Minutes-hours, potentially up to a day (manual - see notes) | Seconds-minutes (DNS/SIP) | Seconds (automatic) | Seconds (automatic) |
+| **Security risk** | 7-18s window, 4-layer defence | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present |
+| **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) | Moderate - uses existing infra |
+| **Licensing** | 1x session/feature + 2x base VM + ~$6/mo | 1x SBC/region | 2x full SBC/region | Appliance licence | VE software licence |
+| **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Can convert directly to HA | Locked to on-premises | Locked to on-premises |
+| **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support | AudioCodes-supported HA |
+| **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood | High likelihood |
+| **Cloud-first aligned** | Yes | Yes | Yes | No | No |
+| **Timeline to deploy** | Moderate - HA build + guardrail stack | Fastest - simplest architecture | Moderate - 2x SBC config + provider coordination | Slowest - hardware procurement + data centre logistics | Moderate-fast - existing hypervisors |
 
 > **Notes - Business Continuity:**
 > - Voice is a critical business service - outages impact external customer communication, internal collaboration, emergency calling, and regulatory compliance.
-> - Options 1 and 4 provide seamless failover with call survivability. Options 2 and 3 do not.
+> - Options 1, 4, and 5 provide seamless failover with call survivability. Options 2 and 3 do not.
 > - Option 2 recovery depends on failure mode: instance reboot (minutes), replacement (potentially hours). Recovery time could extend up to a day if the MSP needs to familiarise themselves with a complex and non-routine SBC standing-up procedure.
 > - Option 3 failover speed depends on DNS TTL (often 60-300s) or SIP retry behaviour.
 >
@@ -146,13 +170,14 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 > - Specific SBC licensing costs should be confirmed with AudioCodes.
 > - Option 1 includes Stack Manager (1x t3.medium per environment) - low additional EC2 cost.
 > - Option 4 includes data centre costs (rack space, power, cooling).
+> - Option 5 leverages existing hypervisor capacity - no new hardware costs, only VE software licensing.
 > - EC2 instance costs depend on selected instance type and region.
 >
 > **Notes - Future Flexibility (critical for Option 2):**
 > - Choosing standalone now and needing HA later = total rebuild (Kapila confirmed). Stack Manager must deploy from scratch via CloudFormation.
 > - Option 3 avoids this trap - can convert directly to HA because there is no programmatic route table manipulation to facilitate heartbeat and failover in the standalone configuration.
 > - Option 1 is already at target HA state - guardrails can be removed if Cyber changes position.
-> - Option 4 locks voice infrastructure to on-premises - requires migration project to move to cloud later.
+> - Options 4 and 5 lock voice infrastructure to on-premises - require migration project to move to cloud later.
 
 ---
 
@@ -162,9 +187,13 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 
 Option 1 is the recommended path. It delivers the target-state HA architecture from day one, avoids any future rebuild risk, and provides seamless failover with call survivability. The 7-18 second exposure window is bounded by a 4-layer automated defence that reverts, revokes, quarantines, and alerts without human intervention. The guardrail infrastructure costs ~$6/month per region.
 
-### Fallback: Option 4 - On-Premises HA
+### Preferred Fallback: Option 5 - On-Premises Virtualised HA
 
-If cybersecurity determines that the compensating controls in Option 1 are insufficient and `ec2:ReplaceRoute` must be eliminated entirely, Option 4 is the recommended fallback. It delivers all of the desired functionality - full HA, call survivability, and the noted IAM risk is simply not present - using a proven physical appliance with traditional VRRP/native HA. The trade-off is strategic: it depends on how important the cloud-first commitment is to the organisation. If cloud-first is a firm direction, Option 4 is off the table. If there is flexibility on that position, it eliminates the concern entirely without compromise on availability or call survivability.
+If cybersecurity determines that the compensating controls in Option 1 are insufficient and `ec2:ReplaceRoute` must be eliminated entirely, Option 5 is the preferred fallback. It delivers all of the desired functionality - full HA, call survivability, and the noted IAM risk is simply not present - using AudioCodes Mediant VE on existing on-premises hypervisors. No hardware procurement is required, making it significantly faster to deploy than Option 4. The trade-off is strategic: it depends on how important the cloud-first commitment is to the organisation. If cloud-first is a firm direction, Option 5 is off the table. If there is flexibility on that position, it eliminates the concern entirely without compromise on availability or call survivability.
+
+### Alternative Fallback: Option 4 - On-Premises Physical HA
+
+If existing hypervisor capacity is not available or not suitable, Option 4 achieves the same outcome as Option 5 using a physical AudioCodes Mediant appliance. The trade-off is hardware procurement lead time and data centre logistics, making it the slowest option to deploy.
 
 ### Also Worth Considering: Option 3 - 2x Standalone SBCs
 
@@ -199,13 +228,14 @@ Option 2 is not recommended. While it is the fastest to deploy and eliminates th
 | 3 | If Option 1 is rejected, is the position permanent or reviewable after non-prod demonstration? | Cybersecurity |
 | 4 | What is the acceptable RTO for voice services? | IT Management |
 | 5 | Is the total rebuild risk (Option 2 → HA) acceptable? | IT Management |
-| 6 | Does cloud-first strategy rule out Option 4? | IT Management |
+| 6 | Does cloud-first strategy rule out Options 4 and 5? | IT Management |
 | 7 | What is the estimated effort to build the guardrail stack (Option 1)? | Cloud Platform / TTO |
 | 8 | Can the guardrail stack be built and tested in non-prod before a final decision? | Cloud Platform / TTO |
 | 9 | Can regional SIP providers support primary/secondary SBC configuration (Option 3)? | Voice Engineering |
-| 10 | What is the hardware lead time for a physical AudioCodes appliance (Option 4)? | Voice Engineering |
-| 11 | What is the target date for Microsoft Teams Direct Routing go-live? | All stakeholders |
-| 12 | Is this decision per-region or must it be consistent across all regions? | All stakeholders |
+| 10 | Is there sufficient hypervisor capacity on-premises for Option 5? | Infrastructure / Voice Engineering |
+| 11 | What is the hardware lead time for a physical AudioCodes appliance (Option 4)? | Voice Engineering |
+| 12 | What is the target date for Microsoft Teams Direct Routing go-live? | All stakeholders |
+| 13 | Is this decision per-region or must it be consistent across all regions? | All stakeholders |
 
 ### References
 

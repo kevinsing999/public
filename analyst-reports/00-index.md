@@ -1,8 +1,8 @@
-# Analyst Review Reports — AudioCodes AWS Deployment Guide v2.6
+# Analyst Review Reports - AudioCodes AWS Deployment Guide v2.6
 
 ## Review Dashboard
 
-**Document Reviewed:** AudioCodes SBC — Unified Deployment & Configuration Guide v2.6 (13 February 2026)
+**Document Reviewed:** AudioCodes SBC - Unified Deployment & Configuration Guide v2.6 (13 February 2026)
 **Review Date:** 4 March 2026
 **Source Document:** 3,559 lines, 23 sections, 26 diagrams, 4 appendices
 
@@ -17,8 +17,8 @@
 | 03 | SBC Engineer Review | Senior SBC / Voice Engineer | 15 | Conditionally Adequate | [03-sbc-engineer-review.md](03-sbc-engineer-review.md) |
 | 04 | Solution Architect Review | Senior Solution Architect | 15 | Adequate with Reservations | [04-solution-architect-review.md](04-solution-architect-review.md) |
 | 05 | Consultant Operational Readiness | Senior Technology Consultant | 15 | Not Ready for Deployment | [05-consultant-operational-readiness.md](05-consultant-operational-readiness.md) |
-| — | Cross-Cutting Findings | All reviewers | 10 themes | — | [cross-cutting-findings.md](cross-cutting-findings.md) |
-| — | SBC Deployment Options — Decision Pack | Decision support (F-CS-017) | 4 options | Decision required | [sbc-deployment-options.md](sbc-deployment-options.md) |
+| - | Cross-Cutting Findings | All reviewers | 10 themes | - | [cross-cutting-findings.md](cross-cutting-findings.md) |
+| - | SBC Deployment Options - Decision Pack | Decision support | 5 options | Decision required | [sbc-deployment-options.md](sbc-deployment-options.md) |
 
 ---
 
@@ -28,11 +28,11 @@
 
 | Report | Critical | High | Medium | Low | Total |
 |--------|----------|------|--------|-----|-------|
-| 01 — Cybersecurity | 1 | 3 | 11 | 2 | **17** |
-| 02 — AWS Cloud | 0 | 4 | 7 | 4 | **15** |
-| 03 — SBC Engineer | 3 | 3 | 6 | 3 | **15** |
-| 04 — Solution Architect | 1 | 4 | 8 | 2 | **15** |
-| 05 — Consultant | 4 | 3 | 6 | 2 | **15** |
+| 01 - Cybersecurity | 1 | 3 | 11 | 2 | **17** |
+| 02 - AWS Cloud | 0 | 4 | 7 | 4 | **15** |
+| 03 - SBC Engineer | 3 | 3 | 6 | 3 | **15** |
+| 04 - Solution Architect | 1 | 4 | 8 | 2 | **15** |
+| 05 - Consultant | 4 | 3 | 6 | 2 | **15** |
 | **Total** | **9** | **17** | **38** | **13** | **77** |
 
 ### Cross-Cutting Themes by Severity
@@ -56,7 +56,7 @@
 | Solution Architect | Conditional Go | Accept SPOFs, create Configuration Workbook, define DR strategy |
 | Consultant | **No-Go** | Develop runbooks, monitoring spec, RACI matrix, training plan before deployment |
 
-**Overall Recommendation:** **Conditional Go** — The architecture is sound but the solution is not deployment-ready. The guide requires supplementation with operational documentation (runbooks, monitoring, RACI, incident response) and resolution of deferred SBC configurations before production deployment can proceed.
+**Overall Recommendation:** **Conditional Go** - The architecture is sound but the solution is not deployment-ready. The guide requires supplementation with operational documentation (runbooks, monitoring, RACI, incident response) and resolution of deferred SBC configurations before production deployment can proceed.
 
 ---
 
@@ -103,7 +103,7 @@ analyst-reports/
 ├── 04-solution-architect-review.md          ← 15 findings (F-SA-001 to F-SA-015)
 ├── 05-consultant-operational-readiness.md   ← 15 findings (F-CO-001 to F-CO-015)
 ├── cross-cutting-findings.md               ← 10 cross-cutting themes (CC-01 to CC-10)
-└── sbc-deployment-options.md              ← SBC HA deployment options decision pack (F-CS-017)
+└── sbc-deployment-options.md              ← SBC HA deployment options decision pack (5 options)
 ```
 
 ---
