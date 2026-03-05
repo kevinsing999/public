@@ -196,7 +196,7 @@ If existing hypervisor capacity is not available or not suitable, Option 4 achie
 
 ### Also Worth Considering: Option 3 - 2x Standalone SBCs
 
-Option 3 removes all route table and EIP IAM permissions while still providing resilience through DNS/SIP-based failover. Active calls will drop on primary failure, but new calls route to the secondary within seconds to minutes. Option 3 preserves a direct upgrade path to full HA. However, running two independent SBCs introduces configuration drift risk - each instance maintains its own configuration independently, and keeping them in sync is an ongoing operational burden.
+Option 3 removes all route table and EIP IAM permissions while still providing resilience through DNS/SIP-based failover. Active calls will drop on primary failure, but new calls route to the secondary within seconds to minutes. The HA mechanism does not manipulate the AWS route table, so the noted IAM risk is not present. However, running two independent SBCs introduces configuration drift risk - each instance maintains its own configuration independently, and keeping them in sync is an ongoing operational burden.
 
 ### Not Recommended: Option 2 - Standalone (No HA)
 
