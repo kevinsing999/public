@@ -140,7 +140,6 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 > - **Against cloud-first strategy** - same strategic trade-off as Option 4, but lower capital cost and faster deployment.
 > - Dependent on existing hypervisor capacity and availability in the required data centre locations.
 > - Ongoing management within the on-premises virtualisation estate (patching, snapshots, hypervisor lifecycle).
-> - Connectivity to AWS (Direct Connect, VPN, or internet) required for Teams SIP signalling if Teams integration terminates in AWS.
 
 ---
 
