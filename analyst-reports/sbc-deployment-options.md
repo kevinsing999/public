@@ -153,7 +153,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 | **Security risk** | 7-18s window, 4-layer defence | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present |
 | **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) | Moderate - uses existing infra |
 | **Licensing** | 1x session/feature + 2x base VM + ~$6/mo | 1x SBC/region | 2x full SBC/region | Appliance licence | VE software licence |
-| **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Can convert directly to HA | Locked to on-premises | Locked to on-premises |
+| **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Already HA - no concerns | Locked to on-premises | Locked to on-premises |
 | **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support | AudioCodes-supported HA |
 | **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood | High likelihood |
 | **Cloud-first aligned** | Yes | Yes | Yes | No | No |
@@ -174,7 +174,7 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 >
 > **Notes - Future Flexibility (critical for Option 2):**
 > - Choosing standalone now and needing HA later = total rebuild (Kapila confirmed). Stack Manager must deploy from scratch via CloudFormation.
-> - Option 3 avoids this trap - can convert directly to HA because there is no programmatic route table manipulation to facilitate heartbeat and failover in the standalone configuration.
+> - Option 3 is already HA - the HA mechanism used does not programmatically manipulate the AWS route table, so there are no concerns with this approach.
 > - Option 1 is already at target HA state - guardrails can be removed if Cyber changes position.
 > - Options 4 and 5 lock voice infrastructure to on-premises - require migration project to move to cloud later.
 
