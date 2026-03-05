@@ -6,7 +6,7 @@
 | **Classification** | Internal — Restricted |
 | **Audience** | IT Manager, Cybersecurity, Cloud Platform, Voice Engineering |
 | **Source** | AudioCodes SBC — Unified Deployment & Configuration Guide v2.6 |
-| **Purpose** | Present four SBC deployment options for decision — no recommendation made |
+| **Purpose** | Present four SBC deployment options with recommendation |
 
 ---
 
@@ -156,7 +156,27 @@ A cybersecurity review identified that `ec2:ReplaceRoute` — the AWS API used b
 
 ---
 
-## 4. Decision Framework and Next Steps
+## 4. Recommendation
+
+### Primary: Option 1 — HA with Retrospective Guardrails
+
+Option 1 is the recommended path. It delivers the target-state HA architecture from day one, avoids any future rebuild risk, and provides seamless failover with call survivability. The 7–18 second exposure window is bounded by a 4-layer automated defence that reverts, revokes, quarantines, and alerts without human intervention. The guardrail infrastructure costs ~$6/month per region.
+
+### Fallback: Option 3 — 2x Standalone SBCs
+
+If cybersecurity determines that the compensating controls in Option 1 are insufficient and `ec2:ReplaceRoute` must be eliminated entirely, Option 3 is the recommended fallback. It removes all route table and EIP IAM permissions while still providing resilience through DNS/SIP-based failover. Active calls will drop on primary failure, but new calls route to the secondary within seconds to minutes. Importantly, Option 3 preserves a direct upgrade path to full HA — there is no programmatic route table manipulation in the standalone configuration, so conversion to an HA pair does not require a total rebuild.
+
+### Also Worth Considering: Option 4 — On-Premises HA
+
+Option 4 delivers all of the desired functionality — full HA, call survivability, and zero cloud IAM concerns — using a proven physical appliance with traditional VRRP/native HA. The trade-off is strategic: it depends on how important the cloud-first commitment is to the organisation. If cloud-first is a firm direction, Option 4 is off the table. If there is flexibility on that position, it eliminates the IAM concern entirely without any of the trade-offs of Options 2 or 3.
+
+### Not Recommended: Option 2 — Standalone (No HA)
+
+Option 2 is not recommended. While it is the fastest to deploy and eliminates the IAM concern, it introduces a single point of failure for voice services and — critically — requires a **total rebuild** to add HA later (confirmed by AudioCodes). This creates a significant risk of painting the organisation into a corner.
+
+---
+
+## 5. Decision Framework and Next Steps
 
 ### Factors to Score
 
