@@ -5,7 +5,6 @@
 | **Date** | 5 March 2026 |
 | **Classification** | Internal — Restricted |
 | **Audience** | IT Manager, Cybersecurity, Cloud Platform, Voice Engineering |
-| **Related Finding** | F-CS-017 — SBC ReplaceRoute IAM Lacks Route-Entry Granularity |
 | **Source** | AudioCodes SBC — Unified Deployment & Configuration Guide v2.6 |
 | **Purpose** | Present four SBC deployment options for decision — no recommendation made |
 
@@ -13,7 +12,7 @@
 
 ## 1. The Problem
 
-Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AWS API used by AudioCodes SBCs for internal VIP failover — cannot be scoped to individual route entries. The SBC IAM policy is already at **maximum IAM granularity** (specific route table ARN + `Env` tag), but a compromised SBC could still replace *any* route in that table, not just VIP routes.
+A cybersecurity review identified that `ec2:ReplaceRoute` — the AWS API used by AudioCodes SBCs for internal VIP failover — cannot be scoped to individual route entries. The SBC IAM policy is already at **maximum IAM granularity** (specific route table ARN + `Env` tag), but a compromised SBC could still replace *any* route in that table, not just VIP routes.
 
 ### Two Failover Paths — Only One Is Affected
 
@@ -110,14 +109,13 @@ Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AW
 | **Security controls** | Physical security, network ACLs — shifts to physical access domain |
 | **Call survivability** | Active calls survive (session state synchronised) |
 | **Licensing** | Hardware appliance licence |
-| **Infrastructure** | Physical appliance + rack space + power + cooling + Direct Connect/VPN to AWS |
+| **Infrastructure** | Physical appliance + rack space + power + cooling |
 
 > **Notes:**
 > - Proven HA mechanism with no cloud API dependency.
 > - **Against cloud-first strategy** — moves voice infrastructure back on-premises.
 > - Hardware procurement lead time: weeks to months depending on model and availability.
 > - Requires physical data centre presence with rack space, power, cooling, and network connectivity.
-> - Direct Connect or VPN required to connect back to AWS for Teams integration.
 > - Ongoing hardware maintenance and lifecycle management (patching, warranty, end-of-life).
 > - Security concerns shift entirely from IAM/cloud to physical access controls and network segmentation.
 
@@ -133,7 +131,7 @@ Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AW
 | **Security risk** | 7–18s window, 4-layer defence | Zero IAM risk | Zero IAM risk | Shifts to physical domain |
 | **Build effort** | Moderate–high | Low (fastest) | Moderate | Variable (hardware) |
 | **Licensing** | 2x SBC/region + ~$6/mo | 1x SBC/region | 2x SBC/region | Appliance licence |
-| **Future flexibility** | Already at target state | **Total rebuild for HA** | Partial rebuild possible | Locked to on-premises |
+| **Future flexibility** | Already at target state | **Total rebuild for HA** | Can convert directly to HA | Locked to on-premises |
 | **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support |
 | **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood |
 | **Cloud-first aligned** | Yes | Yes | Yes | No |
@@ -147,12 +145,12 @@ Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AW
 > **Notes — Cost:**
 > - Specific SBC licensing costs should be confirmed with AudioCodes.
 > - Option 1 includes Stack Manager (1x t3.medium per environment) — low additional EC2 cost.
-> - Option 4 includes data centre costs (rack space, power, cooling) plus Direct Connect or VPN for Teams connectivity.
+> - Option 4 includes data centre costs (rack space, power, cooling).
 > - EC2 instance costs depend on selected instance type and region.
 >
 > **Notes — Future Flexibility (critical for Option 2):**
 > - Choosing standalone now and needing HA later = total rebuild (Kapila confirmed). Stack Manager must deploy from scratch via CloudFormation.
-> - Option 3 avoids this trap — can convert one SBC into an HA pair with partial rebuild.
+> - Option 3 avoids this trap — can convert directly to HA because there is no programmatic route table manipulation to facilitate heartbeat and failover in the standalone configuration.
 > - Option 1 is already at target HA state — guardrails can be removed if Cyber changes position.
 > - Option 4 locks voice infrastructure to on-premises — requires migration project to move to cloud later.
 
@@ -177,7 +175,7 @@ Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AW
 | # | Question | Owner |
 |---|----------|-------|
 | 1 | What is the formal position on the 7–18s exposure window with 4-layer automated containment? | Cybersecurity |
-| 2 | Is the compensating control architecture sufficient to close F-CS-017? | Cybersecurity |
+| 2 | Is the compensating control architecture sufficient to close the finding? | Cybersecurity |
 | 3 | If Option 1 is rejected, is the position permanent or reviewable after non-prod demonstration? | Cybersecurity |
 | 4 | What is the acceptable RTO for voice services? | IT Management |
 | 5 | Is the total rebuild risk (Option 2 → HA) acceptable? | IT Management |
@@ -193,12 +191,12 @@ Cybersecurity finding **F-CS-017** identified that `ec2:ReplaceRoute` — the AW
 
 | Document | Relevance |
 |----------|-----------|
-| Cybersecurity Analyst Review — F-CS-017 | Full finding detail, containment architecture, architecture diagrams, cost breakdown |
-| Cybersecurity Analyst Review — Appendix: F-CS-017 Containment Architecture | EventBridge + Lambda design, validation logic, exposure window analysis |
+| Cybersecurity Analyst Review — ReplaceRoute Finding | Full finding detail, containment architecture, architecture diagrams, cost breakdown |
+| Cybersecurity Analyst Review — ReplaceRoute Containment Architecture Appendix | EventBridge + Lambda design, validation logic, exposure window analysis |
 | AudioCodes Deployment Guide v2.6 — Section 19 (HA) | HA failover mechanism, call survivability, VIP/EIP behaviour |
 | AudioCodes Deployment Guide v2.6 — Section 20 (IAM) | SBC IAM policy, ReplaceRoute and AssociateAddress scoping |
 | AWS IAM Service Authorisation Reference | Confirms no condition keys for destination CIDR or target ENI on `ReplaceRoute` |
-| Cross-Cutting Findings — CC-02 | Broader IAM privilege concerns including Stack Manager |
+| Cross-Cutting Findings — IAM Privilege | Broader IAM privilege concerns including Stack Manager |
 
 ---
 
