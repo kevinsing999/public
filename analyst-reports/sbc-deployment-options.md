@@ -74,9 +74,9 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 
 > **Notes:**
 > - **Fastest path to production** - simplest architecture, no HA infrastructure to build.
-> - **TOTAL REBUILD for future HA.** Kapila (AudioCodes) has confirmed that migrating from standalone to HA is a complete tear-down and rebuild. Stack Manager must deploy the HA pair from scratch via CloudFormation - you cannot retrofit HA onto an existing standalone instance.
+> - **TOTAL REBUILD for future HA** - most likely required at project completion. Kapila (AudioCodes) has confirmed that migrating from standalone to HA is a complete tear-down and rebuild. Stack Manager must deploy the HA pair from scratch via CloudFormation - you cannot retrofit HA onto an existing standalone instance.
 > - Eliminates Stack Manager component, HA heartbeat subnet, VIP routing infrastructure.
-> - Recovery time on failure: minutes to hours depending on failure mode.
+> - Recovery time on failure: minutes to hours depending on failure mode. Could extend up to a day if the MSP needs to familiarise themselves with a complex and non-routine SBC standing-up recovery procedure.
 > - All active calls drop on instance failure.
 
 ### Option 3 - Non-Seamless HA (2x Standalone SBCs)
@@ -127,19 +127,20 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 |----------|--------------------------|---------------------|------------------------|----------------------|
 | **HA capability** | Full 1+1 Active/Standby | None | External failover (DNS/SIP) | Full HA (VRRP/native) |
 | **Call survivability** | Active calls survive | All calls drop | Active calls drop | Active calls survive |
-| **Recovery time** | Seconds (automatic) | Minutes-hours (manual) | Seconds-minutes (DNS/SIP) | Seconds (automatic) |
-| **Security risk** | 7-18s window, 4-layer defence | Zero IAM risk | Zero IAM risk | Noted risk not present |
+| **Recovery time** | Seconds (automatic) | Minutes-hours, potentially up to a day (manual - see notes) | Seconds-minutes (DNS/SIP) | Seconds (automatic) |
+| **Security risk** | 7-18s window, 4-layer defence | Noted IAM risk not present | Noted IAM risk not present | Noted IAM risk not present |
 | **Build effort** | Moderate-high | Low (fastest) | Moderate | Variable (hardware) |
 | **Licensing** | 2x SBC/region + ~$6/mo | 1x SBC/region | 2x SBC/region | Appliance licence |
-| **Future flexibility** | Already at target state | **Total rebuild for HA** | Can convert directly to HA | Locked to on-premises |
+| **Future flexibility** | Already at target state | **Total rebuild for HA** (most likely at project completion) | Can convert directly to HA | Locked to on-premises |
 | **Vendor support** | AudioCodes-supported HA | Standard support | Custom pattern (not HA support) | Hardware support |
 | **Cyber approval** | Depends on risk appetite | High likelihood | High likelihood | High likelihood |
 | **Cloud-first aligned** | Yes | Yes | Yes | No |
+| **Timeline to deploy** | Moderate - HA build + guardrail stack | Fastest - simplest architecture | Moderate - 2x SBC config + provider coordination | Slowest - hardware procurement + data centre logistics |
 
 > **Notes - Business Continuity:**
 > - Voice is a critical business service - outages impact external customer communication, internal collaboration, emergency calling, and regulatory compliance.
 > - Options 1 and 4 provide seamless failover with call survivability. Options 2 and 3 do not.
-> - Option 2 recovery depends on failure mode: instance reboot (minutes), replacement (potentially hours).
+> - Option 2 recovery depends on failure mode: instance reboot (minutes), replacement (potentially hours). Recovery time could extend up to a day if the MSP needs to familiarise themselves with a complex and non-routine SBC standing-up procedure.
 > - Option 3 failover speed depends on DNS TTL (often 60-300s) or SIP retry behaviour.
 >
 > **Notes - Cost:**
@@ -172,7 +173,7 @@ Option 3 removes all route table and EIP IAM permissions while still providing r
 
 ### Not Recommended: Option 2 - Standalone (No HA)
 
-Option 2 is not recommended. While it is the fastest to deploy and eliminates the IAM concern, it introduces a single point of failure for voice services and - critically - requires a **total rebuild** to add HA later (confirmed by AudioCodes). This creates a significant risk of painting the organisation into a corner.
+Option 2 is not recommended. While it is the fastest to deploy and eliminates the IAM concern, it introduces a single point of failure for voice services and - critically - requires a **total rebuild** to add HA later (confirmed by AudioCodes), most likely at project completion. Recovery time on failure could extend up to a day if the MSP needs to work through an unfamiliar SBC recovery procedure. This creates a significant risk of painting the organisation into a corner.
 
 ---
 
