@@ -32,9 +32,27 @@ A cybersecurity review identified that `ec2:ReplaceRoute` - the AWS API used by 
 
 ---
 
-## 1A. Technical Background - HA Mechanisms and NLB
+## 1A. Key Follow-Ups from the Decision Meeting
 
-This section explains why the on-premises HA mechanism cannot be replicated in AWS, how AWS HA works differently across single-AZ and multi-AZ deployments, and why the AWS Network Load Balancer (NLB) option was evaluated and not recommended.
+Three questions were raised following the initial presentation of deployment options. Each is summarised below with detailed technical analysis in the sections that follow.
+
+### 1. What HA mechanism does the on-premises SBC use in VMware, and why can it not be replicated in AWS?
+
+On-premises AudioCodes Mediant VE on VMware uses **Gratuitous ARP (GARP) on a Layer 2 vSwitch** to move IP addresses between VMs during failover. AWS does not support Layer 2 adjacency, multicast, or Gratuitous ARP between EC2 instances - even within the same Availability Zone. IP addresses in AWS are managed by the control plane, not the guest OS network stack. These are fundamentally non-comparable infrastructure models. AudioCodes engineered a cloud-native replacement using AWS API calls instead. See **Section 1B** for full detail.
+
+### 2. The AudioCodes AWS deployment guide references a Network Load Balancer (NLB) - why can we not use that instead?
+
+The NLB option was evaluated and is not recommended. NLB is applicable to **multi-AZ HA only** and mandates DNS-based SIP connectivity for all communicating equipment. This restricts the Proxy SBC's interworking flexibility and creates compatibility concerns with devices such as the Zenitel ICX-AlphaCom intercom system (which uses static local hostname-to-IP mapping rather than dynamic DNS resolution). NLB also does not eliminate all IAM concerns - `ec2:AssociateAddress` is still required for external EIP failover. AudioCodes' deployment recommendation is to not constrain the SBC to DNS-only connectivity. See **Section 1B** for full detail.
+
+### 3. Can we deploy HA in a single Availability Zone in AWS instead?
+
+**Yes.** Single-AZ HA uses a different failover mechanism - secondary private IPs moved between ENIs rather than Virtual IP route table manipulation. This **eliminates `ec2:ReplaceRoute` entirely** and all remaining IAM permissions are fully scopeable to specific resource ARNs. Stack Manager is not mandatory. The trade-off is no protection against AZ-level failure (same risk profile as on-premises single-site deployment). This is presented as **Option 6** in Section 2.
+
+---
+
+## 1B. Technical Background - HA Mechanisms and NLB
+
+This section provides the detailed technical analysis behind the follow-ups above.
 
 ### Why On-Premises HA (VMware/Hyper-V) Cannot Work in AWS
 
@@ -282,7 +300,7 @@ Option 1 remains the recommended path. It delivers the target-state HA architect
 
 **Why Option 1 over Option 6:** Both options deliver full AudioCodes HA with call survivability. The difference is resilience scope. Option 1 protects against AZ-level failure (infrastructure outage, network partition, power event affecting an entire Availability Zone). Option 6 does not. AWS AZ failures are infrequent but have historically resulted in hours of degraded service when they occur. For a critical voice service, the additional protection of multi-AZ deployment is worth the trade-off of accepting the `ec2:ReplaceRoute` permission with compensating controls.
 
-**Why Option 1 over NLB:** The NLB alternative was evaluated (see Section 1A) and not recommended. NLB mandates DNS-based SIP connectivity for all communicating equipment, which restricts the Proxy SBC's interworking flexibility and creates compatibility concerns with devices such as the Zenitel PBX intercom system. The deployment should not be constrained by a DNS dependency in the real-time voice signalling path. NLB also does not eliminate all IAM concerns - `ec2:AssociateAddress` is still required for external EIP failover.
+**Why Option 1 over NLB:** The NLB alternative was evaluated (see Section 1B) and not recommended. NLB mandates DNS-based SIP connectivity for all communicating equipment, which restricts the Proxy SBC's interworking flexibility and creates compatibility concerns with devices such as the Zenitel PBX intercom system. The deployment should not be constrained by a DNS dependency in the real-time voice signalling path. NLB also does not eliminate all IAM concerns - `ec2:AssociateAddress` is still required for external EIP failover.
 
 ### Cloud-First Fallback: Option 6 - Single-AZ HA in AWS
 
@@ -357,4 +375,4 @@ Option 2 is not recommended. While it is the fastest to deploy and eliminates th
 
 ---
 
-*Generated 5 March 2026 - updated 6 March 2026 with technical background (Section 1A), Option 6, and NLB analysis*
+*Generated 5 March 2026 - updated 6 March 2026 with technical background (Section 1B), Option 6, and NLB analysis*
