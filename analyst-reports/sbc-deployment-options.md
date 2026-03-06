@@ -83,14 +83,14 @@ The AudioCodes Mediant VE Installation Manual (Section 2.3.2, Document LTRT-1101
 
 1. **NLB is applicable to multi-AZ HA only** - it is not used in single-AZ deployments (confirmed by AudioCodes).
 2. **Mandates DNS for all communicating equipment.** All devices connecting to the SBC via NLB must be configured to use the NLB DNS Name/FQDN - not an IP address. The SBC must set the "Local Hostname" parameter on each IP Group to the NLB FQDN, which is added to the SIP Contact header. Failure to do this prevents SIP sessions from maintaining connection after HA switchover.
-3. **Not all SIP peers support DNS.** The deployment includes third-party devices (Zenitel PBX intercom system with approximately 12 endpoints, Cisco analog voice gateways) that may not support DNS-based SIP trunk configuration. Basic SIP intercom systems in particular often only support static IP addresses for SIP proxy/registrar.
+3. **Not all SIP peers support dynamic DNS.** The deployment includes third-party devices (Zenitel ICX-AlphaCom intercom system, Cisco analog voice gateways) where DNS support varies. The Zenitel ICX-AlphaCom supports hostnames in SIP trunk configuration but resolves them via a static local hostname-to-IP mapping table (AlphaWeb > System Configuration > Hostnames) rather than dynamic DNS resolution. This means hostname-to-IP mappings must be manually maintained on the Zenitel if the target IP changes.
 4. **Restricts interworking flexibility.** Mandating DNS-based SIP connectivity constrains the Proxy SBC's ability to interwork with any SIP server or device. AudioCodes' deployment recommendation is to not restrict the SBC to DNS-only connectivity.
 5. **Adds operational dependency.** DNS resolution introduces an additional point of failure in the real-time voice signalling path.
 6. **Does not eliminate all IAM concerns.** NLB replaces the VIP (eliminating `ec2:ReplaceRoute`) but `ec2:AssociateAddress` is still required for external EIP failover.
 
 > **Notes:**
 > - Cisco IOS-XE voice gateways (VG series) fully support DNS for SIP configuration and would be NLB-compatible.
-> - Zenitel PBX intercom systems are model-dependent - many basic SIP intercom implementations only support static IP addresses for SIP proxy configuration.
+> - Zenitel ICX-AlphaCom supports hostnames in SIP trunk configuration but uses a static local mapping table rather than dynamic DNS resolution (requires AMC software 11.1.3.5+ for dual-domain hostname support). NLB compatibility would require manual hostname-to-IP mapping maintenance.
 > - The decision to not recommend NLB is a deployment flexibility decision, not a technical impossibility. NLB is a supported AudioCodes option.
 
 ---
