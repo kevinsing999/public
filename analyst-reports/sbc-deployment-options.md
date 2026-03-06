@@ -91,7 +91,7 @@ The AudioCodes Mediant VE Installation Manual (Section 2.3.2, Document LTRT-1101
 > **Notes:**
 > - Cisco IOS-XE voice gateways (VG series) fully support DNS for SIP configuration and would be NLB-compatible.
 > - Zenitel ICX-AlphaCom supports hostnames in SIP trunk configuration but uses a static local mapping table rather than dynamic DNS resolution (requires AMC software 11.1.3.5+ for dual-domain hostname support). NLB compatibility would require manual hostname-to-IP mapping maintenance.
-> - The decision to not recommend NLB is a deployment flexibility decision, not a technical impossibility. NLB is a supported AudioCodes option.
+> - The rationale to not recommend NLB is a deployment flexibility decision, not a technical impossibility. NLB is a supported AudioCodes option.
 
 ---
 
